@@ -15,6 +15,7 @@ const mockFocus = vi.fn(() => {
   mockWindowFocused = true;
 });
 const mockShow = vi.fn();
+const mockHide = vi.fn();
 const mockBlur = vi.fn(() => {
   mockWindowFocused = false;
 });
@@ -43,6 +44,7 @@ vi.mock('electron', () => {
       focus: mockFocus,
       show: mockShow,
       blur: mockBlur,
+      hide: mockHide,
       close: () => {
         mockClose();
         if (eventHandlers.closed) {
