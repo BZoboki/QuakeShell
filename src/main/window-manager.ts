@@ -476,6 +476,7 @@ export async function hide(): Promise<void> {
     win.setBounds({ ...bounds, y: bounds.y - bounds.height });
 
     win.blur();
+    win.hide();
     visible = false;
     onStateChangeCallback?.(false);
     return;
@@ -491,6 +492,7 @@ export async function hide(): Promise<void> {
   await animateHide(win, bounds.y, bounds.height, hideDuration);
 
   win.blur();
+  win.hide();
   visible = false;
   animating = false;
 
