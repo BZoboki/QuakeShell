@@ -52,6 +52,7 @@ _bmad/
 .github/*
 !.github/workflows/
 !.github/workflows/**
+.agents/
 
 # Keep docs and design artifacts tracked
 # (no ignore rules for docs/ or design-artifacts/)
