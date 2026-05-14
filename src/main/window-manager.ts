@@ -346,10 +346,9 @@ export function setQuitting(value: boolean): void {
 async function animateShow(
   window: BrowserWindow,
   targetY: number,
-  height: number,
   duration: number,
 ): Promise<void> {
-  const startY = -height;
+  const startY = window.getBounds().y;
   const startTime = performance.now();
 
   return new Promise((resolve) => {
@@ -376,7 +375,7 @@ async function animateHide(
   height: number,
   duration: number,
 ): Promise<void> {
-  const targetY = -height;
+  const targetY = startY - height;
   const startTime = performance.now();
 
   return new Promise((resolve) => {
@@ -441,7 +440,7 @@ export async function show(): Promise<void> {
 
   win.showInactive();
 
-  await animateShow(win, dims.monitorTop, dims.height, duration);
+  await animateShow(win, dims.monitorTop, duration);
 
   // Re-apply opacity after show (OS/Electron may reset it)
   const opacity = configStoreRef?.get('opacity') ?? 0.85;
@@ -474,7 +473,7 @@ export async function hide(): Promise<void> {
     logger.info('Hide instant (animationSpeed=0)');
 
     const bounds = win.getBounds();
-    win.setBounds({ ...bounds, y: -bounds.height });
+    win.setBounds({ ...bounds, y: bounds.y - bounds.height });
 
     win.blur();
     visible = false;
