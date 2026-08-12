@@ -21,3 +21,7 @@ Pre-existing issues surfaced during code review but out of scope for the change 
 - source_spec: `docs/implementation-artifacts/spec-fix-double-paste.md`
   summary: `fitAddon.fit()` in TerminalView.tsx can be invoked twice for a single logical resize — the `window` `resize` listener and the `ResizeObserver` on the container both call it independently with no debouncing/coalescing.
   evidence: Confirmed via blind-hunter review of the Ctrl+V double-paste fix (2026-08-12).
+
+- source_spec: `docs/implementation-artifacts/spec-fix-split-view-scrolling.md`
+  summary: `SplitPane.tsx` destructures its `focusedPaneTabId` prop as `_focusedPaneTabId` and never uses it — there is no visual affordance distinguishing the focused pane from the unfocused one in a split view.
+  evidence: Confirmed via blind-hunter review of the split-view scrolling fix (2026-08-12); pre-existing in `SplitPane.tsx`, which this fix did not modify — surfaced incidentally while reviewing the render-unification diff.

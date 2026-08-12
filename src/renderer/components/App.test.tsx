@@ -7,10 +7,6 @@ vi.mock('./ThemeStyleInjector', () => ({
   default: () => null,
 }));
 
-vi.mock('./Terminal/TerminalView', () => ({
-  TerminalView: ({ tabId }: { tabId: string }) => <div data-testid={`terminal-${tabId}`}>{tabId}</div>,
-}));
-
 vi.mock('./ShellPicker/ShellPicker', () => ({
   ShellPicker: ({ tabId }: { tabId: string }) => <div data-testid={`picker-${tabId}`}>{tabId}</div>,
 }));
@@ -192,6 +188,36 @@ describe('renderer/App hover tab linking', () => {
     expect(mockTabAPI.switchTo).not.toHaveBeenCalled();
   });
 
+  it('does not remount the terminal area when linking an already-displayed tab into a group', async () => {
+    await act(async () => {
+      render(<App />, container);
+    });
+    await flushPromises();
+
+    const beforeLink = container.querySelector('[data-testid="split-pane"]');
+    expect(beforeLink).not.toBeNull();
+    expect(beforeLink?.textContent).toBe('tab-1|tab-1');
+
+    const linkButton = container.querySelector('[aria-label="Link One and Two"]') as HTMLButtonElement | null;
+    expect(linkButton).not.toBeNull();
+
+    await act(async () => {
+      linkButton?.parentElement?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    });
+
+    await act(async () => {
+      linkButton?.click();
+    });
+    await flushPromises();
+
+    const afterLink = container.querySelector('[data-testid="split-pane"]');
+    // Same DOM node instance -- proves App.tsx never switched component type
+    // (bare TerminalView -> SplitPane) across the link transition, so the
+    // real TerminalView/xterm.js instance inside it would have survived too.
+    expect(afterLink).toBe(beforeLink);
+    expect(afterLink?.textContent).toBe('tab-1|tab-2|tab-1');
+  });
+
   it('reorders standalone tabs by drag and drop', async () => {
     await act(async () => {
       render(<App />, container);
@@ -359,7 +385,8 @@ describe('renderer/App hover tab linking', () => {
     });
     await flushPromises();
 
-    expect(container.querySelector('[data-testid="split-pane"]')?.textContent).toBe('tab-3|tab-4|tab-4');
+    const beforeDisconnect = container.querySelector('[data-testid="split-pane"]');
+    expect(beforeDisconnect?.textContent).toBe('tab-3|tab-4|tab-4');
 
     await act(async () => {
       closedListener?.({ tabId: 'tab-4' });
@@ -367,9 +394,12 @@ describe('renderer/App hover tab linking', () => {
     await flushPromises();
 
     expect(linkedTabGroups.value).toEqual([]);
-    expect(container.querySelector('[data-testid="split-pane"]')).toBeNull();
-    expect(container.querySelector('[data-testid="terminal-tab-3"]')?.textContent).toBe('tab-3');
-    expect(container.querySelector('[data-testid="terminal-tab-4"]')).toBeNull();
+    const afterDisconnect = container.querySelector('[data-testid="split-pane"]');
+    // Same DOM node instance across the group-shrinks-to-one transition --
+    // proves App.tsx keeps rendering through SplitPane on disconnect too,
+    // so the real TerminalView/xterm.js instance inside it would survive.
+    expect(afterDisconnect).toBe(beforeDisconnect);
+    expect(afterDisconnect?.textContent).toBe('tab-3|tab-3');
   });
 
   it('refreshes the tab list when the active tab was created outside the renderer flow', async () => {
@@ -400,7 +430,7 @@ describe('renderer/App hover tab linking', () => {
     await flushPromises();
 
     expect(mockTabAPI.list).toHaveBeenCalledTimes(2);
-    expect(container.querySelector('[data-testid="terminal-tab-4"]')?.textContent).toBe('tab-4');
+    expect(container.querySelector('[data-testid="split-pane"]')?.textContent).toBe('tab-4|tab-4');
   });
 
   it('opens settings from the inline gear button', async () => {

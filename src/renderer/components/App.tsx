@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, useRef } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import ThemeStyleInjector from './ThemeStyleInjector';
 import { initThemeStore } from '../state/theme-store';
-import { TerminalView } from './Terminal/TerminalView';
 import { ShellPicker } from './ShellPicker/ShellPicker';
 import OnboardingOverlay from './Onboarding/OnboardingOverlay';
 import UpdateRestartPrompt from './UpdateRestartPrompt';
@@ -152,7 +151,17 @@ export function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!e.ctrlKey) return;
 
-      const keyboardTargetTabId = focusedPaneTabId.value ?? currentTabId;
+      // Only trust focusedPaneTabId if it's actually a member of the
+      // currently displayed tab's group -- it can go stale (e.g. after
+      // switching tabs without ever focusing a pane in the new tab), and a
+      // stale value must not steal keyboard shortcuts meant for currentTabId.
+      const currentLeadTabId = currentTabId ? getSplitPrimary(currentTabId) ?? currentTabId : null;
+      const currentGroupTabIds = currentLeadTabId
+        ? (getTabGroup(currentLeadTabId) ?? [currentLeadTabId])
+        : [];
+      const keyboardTargetTabId = currentGroupTabIds.includes(focusedPaneTabId.value ?? '')
+        ? focusedPaneTabId.value ?? currentTabId
+        : currentTabId;
 
       if (e.key === 't') {
         e.preventDefault();
@@ -813,21 +822,17 @@ export function App() {
             onShellSelected={handleShellSelected}
           />
         )}
-        {displayTabId && !showPicker && currentGroupTabIds.length > 1 && currentFocusedPane && (
+        {/*
+          SplitPane now renders every displayed tab, not just linked groups --
+          for an ungrouped tab it renders a single full-width pane with no
+          divider, so the component type stays the same across link/disconnect
+          transitions and xterm.js instances are never remounted.
+        */}
+        {displayTabId && !showPicker && currentGroupTabIds.length > 0 && currentFocusedPane && (
           <SplitPane
             tabIds={currentGroupTabIds}
             focusedPaneTabId={currentFocusedPane}
             onFocusPane={(id) => { focusedPaneTabId.value = id; }}
-            opacity={currentOpacity}
-            fontSize={currentFontSize}
-            fontFamily={currentFontFamily}
-            lineHeight={currentLineHeight}
-          />
-        )}
-        {displayTabId && !showPicker && currentGroupTabIds.length <= 1 && (
-          <TerminalView
-            key={displayTabId}
-            tabId={displayTabId}
             opacity={currentOpacity}
             fontSize={currentFontSize}
             fontFamily={currentFontFamily}
