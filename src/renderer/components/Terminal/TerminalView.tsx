@@ -141,20 +141,12 @@ export function TerminalView({
       },
     );
 
-    // Clipboard: Ctrl+V paste
+    // Do not add Ctrl+V handling here — xterm's textarea already has a native 'paste' event listener that forwards pasted text via onData.
     terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.defaultPrevented) {
         return false;
       }
 
-      if (e.ctrlKey && e.key === 'v' && e.type === 'keydown') {
-        navigator.clipboard.readText().then((text) => {
-          if (text) {
-            window.quakeshell.tab.input(tabId, text);
-          }
-        });
-        return false; // prevent xterm from handling it
-      }
       // Let Ctrl+C with selection be handled by onKey above
       if (e.ctrlKey && e.key === 'c' && terminal.hasSelection()) {
         return false;
