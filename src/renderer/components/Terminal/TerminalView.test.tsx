@@ -399,6 +399,17 @@ describe('renderer/TerminalView', () => {
     expect(customKeyHandler).toBeTypeOf('function');
   });
 
+  it('does not intercept Ctrl+V, leaving paste to xterm\'s native handling to avoid double-pasting', () => {
+    mount();
+
+    const event = new KeyboardEvent('keydown', { key: 'v', ctrlKey: true });
+    const result = customKeyHandler?.(event);
+
+    expect(result).toBe(true);
+    expect(navigator.clipboard.readText).not.toHaveBeenCalled();
+    expect(mockTabAPI.input).not.toHaveBeenCalled();
+  });
+
   it('updates xterm font options when fontSize signal changes', () => {
     mount();
 
