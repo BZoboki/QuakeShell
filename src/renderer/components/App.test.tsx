@@ -57,6 +57,14 @@ const themeSignals = vi.hoisted(() => ({
   initThemeStore: vi.fn().mockResolvedValue(undefined),
 }));
 
+const platformSignals = vi.hoisted(() => ({
+  initPlatformStore: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../state/platform-store', () => ({
+  initPlatformStore: platformSignals.initPlatformStore,
+}));
+
 const mockWindowAPI = {
   openSettings: vi.fn().mockResolvedValue(undefined),
 };
@@ -167,6 +175,11 @@ describe('renderer/App hover tab linking', () => {
       render(<App />, container);
     });
     await flushPromises();
+
+    // Guards the boot sequence: the cached pty-info value must be fetched
+    // (initPlatformStore) alongside config/theme init, before any Terminal
+    // is constructed -- see spec-fix-terminal-resize-scrollback-loss.md.
+    expect(platformSignals.initPlatformStore).toHaveBeenCalled();
 
     const linkButton = container.querySelector('[aria-label="Link One and Two"]') as HTMLButtonElement | null;
     expect(linkButton).not.toBeNull();

@@ -82,6 +82,14 @@ vi.mock('../../state/config-store', () => ({
   lineHeight: mockSignals.lineHeight,
 }));
 
+const mockPlatformStore = vi.hoisted(() => ({
+  getTerminalPtyInfo: vi.fn<() => { backend: 'conpty'; buildNumber: number } | null>(() => null),
+}));
+
+vi.mock('../../state/platform-store', () => ({
+  getTerminalPtyInfo: mockPlatformStore.getTerminalPtyInfo,
+}));
+
 vi.mock('../../theme/tokyo-night', () => ({
   tokyoNightTheme: {
     background: '#1a1b26',
@@ -257,6 +265,7 @@ describe('renderer/TerminalView', () => {
     mockSignals.fontFamily.value = 'Cascadia Code, Consolas, Courier New, monospace';
     mockSignals.lineHeight.value = 1.2;
     activeTheme.value = solarizedTheme;
+    mockPlatformStore.getTerminalPtyInfo.mockReturnValue(null);
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -288,6 +297,27 @@ describe('renderer/TerminalView', () => {
         cursorBlink: true,
         cursorStyle: 'bar',
         screenReaderMode: true,
+      }),
+    );
+  });
+
+  it('omits windowsPty from Terminal construction when the platform store has no cached pty info', () => {
+    mockPlatformStore.getTerminalPtyInfo.mockReturnValue(null);
+
+    mount();
+
+    const constructedOptions = mockTerminalConstructor.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(constructedOptions)).not.toContain('windowsPty');
+  });
+
+  it('passes windowsPty into Terminal construction when the platform store has cached ConPTY info', () => {
+    mockPlatformStore.getTerminalPtyInfo.mockReturnValue({ backend: 'conpty', buildNumber: 22621 });
+
+    mount();
+
+    expect(mockTerminalConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        windowsPty: { backend: 'conpty', buildNumber: 22621 },
       }),
     );
   });

@@ -187,6 +187,7 @@ contextBridge.exposeInMainWorld('quakeshell', {
   },
   platform: {
     isAcrylicSupported: () => ipcRenderer.invoke(CHANNELS.PLATFORM_IS_ACRYLIC_SUPPORTED),
+    getTerminalPtyInfo: () => ipcRenderer.invoke(CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO),
   },
   display: {
     getAll: () => ipcRenderer.invoke(CHANNELS.DISPLAY_GET_ALL),

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import ThemeStyleInjector from './ThemeStyleInjector';
 import { initThemeStore } from '../state/theme-store';
+import { initPlatformStore } from '../state/platform-store';
 import { ShellPicker } from './ShellPicker/ShellPicker';
 import OnboardingOverlay from './Onboarding/OnboardingOverlay';
 import UpdateRestartPrompt from './UpdateRestartPrompt';
@@ -227,9 +228,10 @@ export function App() {
     void Promise.all([
       initConfigStore(),
       initThemeStore(),
+      initPlatformStore(),
       window.quakeshell.tab.list(),
     ])
-      .then(([, , list]) => {
+      .then(([, , , list]) => {
         if (cancelled) {
           return;
         }

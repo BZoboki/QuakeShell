@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 type IpcHandler = (...args: unknown[]) => unknown;
 
@@ -23,6 +23,10 @@ const { mockElectronApp } = vi.hoisted(() => ({
   },
 }));
 
+const { mockOsRelease } = vi.hoisted(() => ({
+  mockOsRelease: vi.fn(() => '10.0.22621'),
+}));
+
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => {
@@ -35,6 +39,11 @@ vi.mock('electron', () => ({
   },
   app: mockElectronApp,
 }));
+
+vi.mock('node:os', () => {
+  const release = (...args: unknown[]) => mockOsRelease(...args);
+  return { release, default: { release } };
+});
 
 vi.mock('electron-log/main', () => {
   const scopedLogger = {
@@ -133,6 +142,12 @@ import * as notificationManager from './notification-manager';
 import { themeEngine } from './theme-engine';
 import * as contextMenuInstaller from './context-menu-installer';
 
+const originalPlatform = process.platform;
+
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+}
+
 describe('main/ipc-handlers', () => {
   const mockMainWindow = {
     isDestroyed: vi.fn(() => false),
@@ -162,6 +177,10 @@ describe('main/ipc-handlers', () => {
     mockElectronApp.isPackaged = false;
     Object.keys(ipcMainHandlers).forEach((key) => delete ipcMainHandlers[key]);
     registerIpcHandlers(mockConfigStore as unknown as ConfigStore, mockMainWindow);
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
   });
 
   describe('pending update IPC', () => {
@@ -461,6 +480,47 @@ describe('main/ipc-handlers', () => {
         isRegistered: true,
         available: true,
       });
+    });
+  });
+
+  describe('platform:get-terminal-pty-info handler', () => {
+    it('registers the PLATFORM_GET_TERMINAL_PTY_INFO handler', () => {
+      expect(ipcMainHandlers[CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO]).toBeDefined();
+    });
+
+    it('returns the conpty backend and parsed build number on Windows', async () => {
+      setPlatform('win32');
+      mockOsRelease.mockReturnValueOnce('10.0.22621');
+
+      await expect(
+        ipcMainHandlers[CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO]({}),
+      ).resolves.toEqual({ backend: 'conpty', buildNumber: 22621 });
+    });
+
+    it('returns null on non-Windows platforms', async () => {
+      setPlatform('darwin');
+
+      await expect(
+        ipcMainHandlers[CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO]({}),
+      ).resolves.toBeNull();
+    });
+
+    it('falls back to build number 0 when os.release() is malformed', async () => {
+      setPlatform('win32');
+      mockOsRelease.mockReturnValueOnce('not-a-version');
+
+      await expect(
+        ipcMainHandlers[CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO]({}),
+      ).resolves.toEqual({ backend: 'conpty', buildNumber: 0 });
+    });
+
+    it('falls back to build number 0 when the third release segment is present but non-numeric', async () => {
+      setPlatform('win32');
+      mockOsRelease.mockReturnValueOnce('10.0.abc');
+
+      await expect(
+        ipcMainHandlers[CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO]({}),
+      ).resolves.toEqual({ backend: 'conpty', buildNumber: 0 });
     });
   });
 });

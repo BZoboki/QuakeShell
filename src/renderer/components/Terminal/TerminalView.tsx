@@ -11,6 +11,7 @@ import {
   lineHeight as lineHeightSignal,
 } from '../../state/config-store';
 import { activeTheme, getCurrentTheme } from '../../state/theme-store';
+import { getTerminalPtyInfo } from '../../state/platform-store';
 import { tokyoNightTheme } from '../../theme/tokyo-night';
 import '@xterm/xterm/css/xterm.css';
 
@@ -62,6 +63,13 @@ export function TerminalView({
     const container = containerRef.current;
     if (!container) return;
 
+    // Windows/ConPTY-only: tells xterm.js which reflow strategy to use on
+    // column-count resize. Without this, xterm's generic reflow doesn't match
+    // ConPTY's line-wrap semantics and corrupts the scrollback buffer on
+    // resize. `terminalPtyInfo` is null on macOS/Linux or if the boot-time
+    // IPC query failed, in which case `windowsPty` is simply omitted.
+    const terminalPtyInfo = getTerminalPtyInfo();
+
     const terminal = new Terminal({
       fontFamily: currentFontFamily,
       fontSize: currentFontSize,
@@ -72,6 +80,7 @@ export function TerminalView({
       cursorBlink: true,
       cursorStyle: 'bar',
       screenReaderMode: true,
+      ...(terminalPtyInfo ? { windowsPty: terminalPtyInfo } : {}),
     });
 
     const fitAddon = new FitAddon();

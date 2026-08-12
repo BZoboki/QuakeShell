@@ -480,6 +480,16 @@ export function registerIpcHandlers(
     return process.platform === 'win32' && buildNumber >= 22621;
   });
 
+  ipcMain.handle(CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO, async () => {
+    if (process.platform !== 'win32') {
+      return null;
+    }
+
+    const parsedBuildNumber = Number.parseInt(os.release().split('.')[2] ?? '0', 10);
+    const buildNumber = Number.isNaN(parsedBuildNumber) ? 0 : parsedBuildNumber;
+    return { backend: 'conpty' as const, buildNumber };
+  });
+
   ipcMain.handle(CHANNELS.DISPLAY_GET_ALL, async () => {
     const primaryDisplay = screen.getPrimaryDisplay();
 
