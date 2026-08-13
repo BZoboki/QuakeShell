@@ -1,0 +1,134 @@
+import { describe, it, expect, vi } from 'vitest';
+
+const {
+  mockInvoke,
+  mockExposeInMainWorld,
+  mockIpcOn,
+  mockIpcRemoveListener,
+} = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+  mockExposeInMainWorld: vi.fn(),
+  mockIpcOn: vi.fn(),
+  mockIpcRemoveListener: vi.fn(),
+}));
+
+vi.mock('electron', () => ({
+  contextBridge: {
+    exposeInMainWorld: (...args: unknown[]) => mockExposeInMainWorld(...args),
+  },
+  ipcRenderer: {
+    invoke: (...args: unknown[]) => mockInvoke(...args),
+    on: mockIpcOn,
+    removeListener: mockIpcRemoveListener,
+  },
+}));
+
+import { CHANNELS } from '../shared/channels';
+import './index';
+
+interface QuakeShellAPIUnderTest {
+  platform: {
+    isAcrylicSupported: () => Promise<unknown>;
+    getTerminalPtyInfo: () => Promise<unknown>;
+  };
+  terminal: {
+    onFocus: (callback: () => void) => () => void;
+  };
+  tab: {
+    onData: (callback: (payload: { tabId: string; data: string }) => void) => () => void;
+    onExited: (callback: (payload: { tabId: string; exitCode: number; signal: number }) => void) => () => void;
+  };
+}
+
+describe('preload/index', () => {
+  const exposedApi = mockExposeInMainWorld.mock.calls[0]?.[1] as QuakeShellAPIUnderTest;
+
+  it('exposes the quakeshell API under the expected global key', () => {
+    expect(mockExposeInMainWorld).toHaveBeenCalledWith('quakeshell', expect.any(Object));
+  });
+
+  it('bridges platform.getTerminalPtyInfo to the new PLATFORM_GET_TERMINAL_PTY_INFO channel', () => {
+    exposedApi.platform.getTerminalPtyInfo();
+
+    expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO);
+  });
+
+  it('still bridges platform.isAcrylicSupported to its existing channel', () => {
+    exposedApi.platform.isAcrylicSupported();
+
+    expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.PLATFORM_IS_ACRYLIC_SUPPORTED);
+  });
+
+  it('fans out persistent terminal channels through one Electron listener per channel', () => {
+    mockIpcOn.mockClear();
+    mockIpcRemoveListener.mockClear();
+
+    const dataCallbacks = Array.from({ length: 20 }, () => vi.fn());
+    const exitCallbacks = Array.from({ length: 20 }, () => vi.fn());
+    const focusCallbacks = Array.from({ length: 20 }, () => vi.fn());
+    const unsubscribers = [
+      ...dataCallbacks.map((callback) => exposedApi.tab.onData(callback)),
+      ...exitCallbacks.map((callback) => exposedApi.tab.onExited(callback)),
+      ...focusCallbacks.map((callback) => exposedApi.terminal.onFocus(callback)),
+    ];
+
+    expect(mockIpcOn).toHaveBeenCalledTimes(3);
+
+    const dataListener = mockIpcOn.mock.calls.find(
+      ([channel]) => channel === CHANNELS.TAB_DATA,
+    )?.[1] as ((event: unknown, payload: { tabId: string; data: string }) => void) | undefined;
+    const exitListener = mockIpcOn.mock.calls.find(
+      ([channel]) => channel === CHANNELS.TAB_EXITED,
+    )?.[1] as ((event: unknown, payload: { tabId: string; exitCode: number; signal: number }) => void) | undefined;
+    const focusListener = mockIpcOn.mock.calls.find(
+      ([channel]) => channel === CHANNELS.TERMINAL_FOCUS,
+    )?.[1] as ((event: unknown) => void) | undefined;
+
+    expect(dataListener).toBeTypeOf('function');
+    expect(exitListener).toBeTypeOf('function');
+    expect(focusListener).toBeTypeOf('function');
+
+    dataListener?.({}, { tabId: 'tab-20', data: 'retained output' });
+    exitListener?.({}, { tabId: 'tab-20', exitCode: 0, signal: 0 });
+    focusListener?.({});
+
+    for (const callback of dataCallbacks) {
+      expect(callback).toHaveBeenCalledWith({ tabId: 'tab-20', data: 'retained output' });
+    }
+    for (const callback of exitCallbacks) {
+      expect(callback).toHaveBeenCalledWith({ tabId: 'tab-20', exitCode: 0, signal: 0 });
+    }
+    for (const callback of focusCallbacks) {
+      expect(callback).toHaveBeenCalledTimes(1);
+    }
+
+    const [firstUnsubscribe, ...remainingUnsubscribers] = unsubscribers;
+    firstUnsubscribe();
+
+    expect(mockIpcRemoveListener).not.toHaveBeenCalled();
+
+    remainingUnsubscribers.forEach((unsubscribe) => unsubscribe());
+
+    expect(mockIpcRemoveListener).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps duplicate callback registrations independently subscribable', () => {
+    mockIpcOn.mockClear();
+    mockIpcRemoveListener.mockClear();
+
+    const callback = vi.fn();
+    const firstUnsubscribe = exposedApi.terminal.onFocus(callback);
+    const secondUnsubscribe = exposedApi.terminal.onFocus(callback);
+    const focusListener = mockIpcOn.mock.calls[0]?.[1] as ((event: unknown) => void);
+
+    firstUnsubscribe();
+    focusListener({});
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(mockIpcRemoveListener).not.toHaveBeenCalled();
+
+    secondUnsubscribe();
+
+    expect(mockIpcRemoveListener).toHaveBeenCalledWith(CHANNELS.TERMINAL_FOCUS, focusListener);
+  });
+});

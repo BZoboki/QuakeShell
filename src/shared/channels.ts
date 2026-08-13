@@ -60,6 +60,7 @@ export const CHANNELS = {
 
   // Platform
   PLATFORM_IS_ACRYLIC_SUPPORTED: 'platform:is-acrylic-supported',
+  PLATFORM_GET_TERMINAL_PTY_INFO: 'platform:get-terminal-pty-info',
 
   // Display
   DISPLAY_GET_ALL: 'display:get-all',

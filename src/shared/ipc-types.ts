@@ -217,8 +217,14 @@ export interface QuakeShellAppAPI {
   getContextMenuStatus(): Promise<ContextMenuStatus>;
 }
 
+export interface TerminalPtyInfo {
+  backend: 'conpty';
+  buildNumber: number;
+}
+
 export interface QuakeShellPlatformAPI {
   isAcrylicSupported(): Promise<boolean>;
+  getTerminalPtyInfo(): Promise<TerminalPtyInfo | null>;
 }
 
 export interface QuakeShellDisplayAPI {

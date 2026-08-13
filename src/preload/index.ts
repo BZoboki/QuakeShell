@@ -1,6 +1,50 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { CHANNELS } from '@shared/channels';
-import type { PendingUpdatePayload } from '@shared/ipc-types';
+import type {
+  PendingUpdatePayload,
+  TabDataPayload,
+  TabExitedPayload,
+} from '@shared/ipc-types';
+
+type IpcSubscriber<TArgs extends unknown[]> = (...args: TArgs) => void;
+
+function createIpcSubscriber<TArgs extends unknown[]>(channel: string) {
+  const subscribers = new Set<IpcSubscriber<TArgs>>();
+  let listening = false;
+
+  const listener = (_event: Electron.IpcRendererEvent, ...args: TArgs) => {
+    for (const subscriber of [...subscribers]) {
+      subscriber(...args);
+    }
+  };
+
+  return (callback: IpcSubscriber<TArgs>) => {
+    const subscription: IpcSubscriber<TArgs> = (...args) => callback(...args);
+    subscribers.add(subscription);
+
+    if (!listening) {
+      ipcRenderer.on(channel, listener);
+      listening = true;
+    }
+
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+
+      subscribed = false;
+      subscribers.delete(subscription);
+
+      if (subscribers.size === 0 && listening) {
+        ipcRenderer.removeListener(channel, listener);
+        listening = false;
+      }
+    };
+  };
+}
+
+const subscribeToTerminalFocus = createIpcSubscriber<[]>(CHANNELS.TERMINAL_FOCUS);
+const subscribeToTabData = createIpcSubscriber<[TabDataPayload]>(CHANNELS.TAB_DATA);
+const subscribeToTabExited = createIpcSubscriber<[TabExitedPayload]>(CHANNELS.TAB_EXITED);
 
 contextBridge.exposeInMainWorld('quakeshell', {
   config: {
@@ -49,13 +93,7 @@ contextBridge.exposeInMainWorld('quakeshell', {
       };
     },
     respawnShell: () => ipcRenderer.invoke(CHANNELS.TERMINAL_RESPAWN),
-    onFocus: (callback: () => void) => {
-      const listener = () => callback();
-      ipcRenderer.on(CHANNELS.TERMINAL_FOCUS, listener);
-      return () => {
-        ipcRenderer.removeListener(CHANNELS.TERMINAL_FOCUS, listener);
-      };
-    },
+    onFocus: (callback: () => void) => subscribeToTerminalFocus(callback),
   },
   tab: {
     create: (options?: { shellType?: string; cwd?: string; deferred?: boolean }) =>
@@ -80,16 +118,7 @@ contextBridge.exposeInMainWorld('quakeshell', {
       ipcRenderer.invoke(CHANNELS.TAB_INPUT, { tabId, data }),
     resize: (tabId: string, cols: number, rows: number) =>
       ipcRenderer.invoke(CHANNELS.TAB_RESIZE, { tabId, cols, rows }),
-    onData: (callback: (payload: { tabId: string; data: string }) => void) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        payload: { tabId: string; data: string },
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.TAB_DATA, listener);
-      return () => {
-        ipcRenderer.removeListener(CHANNELS.TAB_DATA, listener);
-      };
-    },
+    onData: (callback: (payload: TabDataPayload) => void) => subscribeToTabData(callback),
     onClosed: (callback: (payload: { tabId: string }) => void) => {
       const listener = (
         _event: Electron.IpcRendererEvent,
@@ -110,16 +139,7 @@ contextBridge.exposeInMainWorld('quakeshell', {
         ipcRenderer.removeListener(CHANNELS.TAB_ACTIVE_CHANGED, listener);
       };
     },
-    onExited: (callback: (payload: { tabId: string; exitCode: number; signal: number }) => void) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        payload: { tabId: string; exitCode: number; signal: number },
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.TAB_EXITED, listener);
-      return () => {
-        ipcRenderer.removeListener(CHANNELS.TAB_EXITED, listener);
-      };
-    },
+    onExited: (callback: (payload: TabExitedPayload) => void) => subscribeToTabExited(callback),
     onRenamed: (callback: (payload: { tabId: string; name: string }) => void) => {
       const listener = (
         _event: Electron.IpcRendererEvent,
@@ -187,6 +207,7 @@ contextBridge.exposeInMainWorld('quakeshell', {
   },
   platform: {
     isAcrylicSupported: () => ipcRenderer.invoke(CHANNELS.PLATFORM_IS_ACRYLIC_SUPPORTED),
+    getTerminalPtyInfo: () => ipcRenderer.invoke(CHANNELS.PLATFORM_GET_TERMINAL_PTY_INFO),
   },
   display: {
     getAll: () => ipcRenderer.invoke(CHANNELS.DISPLAY_GET_ALL),

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import ThemeStyleInjector from './ThemeStyleInjector';
 import { initThemeStore } from '../state/theme-store';
-import { TerminalView } from './Terminal/TerminalView';
+import { initPlatformStore } from '../state/platform-store';
 import { ShellPicker } from './ShellPicker/ShellPicker';
 import OnboardingOverlay from './Onboarding/OnboardingOverlay';
 import UpdateRestartPrompt from './UpdateRestartPrompt';
@@ -152,7 +152,17 @@ export function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!e.ctrlKey) return;
 
-      const keyboardTargetTabId = focusedPaneTabId.value ?? currentTabId;
+      // Only trust focusedPaneTabId if it's actually a member of the
+      // currently displayed tab's group -- it can go stale (e.g. after
+      // switching tabs without ever focusing a pane in the new tab), and a
+      // stale value must not steal keyboard shortcuts meant for currentTabId.
+      const currentLeadTabId = currentTabId ? getSplitPrimary(currentTabId) ?? currentTabId : null;
+      const currentGroupTabIds = currentLeadTabId
+        ? (getTabGroup(currentLeadTabId) ?? [currentLeadTabId])
+        : [];
+      const keyboardTargetTabId = currentGroupTabIds.includes(focusedPaneTabId.value ?? '')
+        ? focusedPaneTabId.value ?? currentTabId
+        : currentTabId;
 
       if (e.key === 't') {
         e.preventDefault();
@@ -218,9 +228,10 @@ export function App() {
     void Promise.all([
       initConfigStore(),
       initThemeStore(),
+      initPlatformStore(),
       window.quakeshell.tab.list(),
     ])
-      .then(([, , list]) => {
+      .then(([, , , list]) => {
         if (cancelled) {
           return;
         }
@@ -458,6 +469,15 @@ export function App() {
   const currentFocusedPane = currentGroupTabIds.includes(focusedPaneTabId.value ?? '')
     ? focusedPaneTabId.value ?? displayTabId
     : displayTabId;
+  const terminalTabIds = tabList
+    .filter((tab) => tab.status !== 'pending')
+    .map((tab) => tab.id);
+  const visibleTerminalTabIds = showPicker
+    ? []
+    : currentGroupTabIds.filter((tabId) => terminalTabIds.includes(tabId));
+  const focusedTerminalPane = visibleTerminalTabIds.includes(currentFocusedPane ?? '')
+    ? currentFocusedPane
+    : visibleTerminalTabIds[0] ?? null;
   const visibleTabItems = buildVisibleTabItems(tabList);
   const getTabLabel = (tab: TabInfo) =>
     tab.manualName || (tab.status === 'pending' ? 'New Tab' : tab.shellType) || 'shell';
@@ -813,21 +833,12 @@ export function App() {
             onShellSelected={handleShellSelected}
           />
         )}
-        {displayTabId && !showPicker && currentGroupTabIds.length > 1 && currentFocusedPane && (
+        {terminalTabIds.length > 0 && (
           <SplitPane
-            tabIds={currentGroupTabIds}
-            focusedPaneTabId={currentFocusedPane}
+            tabIds={terminalTabIds}
+            visibleTabIds={visibleTerminalTabIds}
+            focusedPaneTabId={focusedTerminalPane}
             onFocusPane={(id) => { focusedPaneTabId.value = id; }}
-            opacity={currentOpacity}
-            fontSize={currentFontSize}
-            fontFamily={currentFontFamily}
-            lineHeight={currentLineHeight}
-          />
-        )}
-        {displayTabId && !showPicker && currentGroupTabIds.length <= 1 && (
-          <TerminalView
-            key={displayTabId}
-            tabId={displayTabId}
             opacity={currentOpacity}
             fontSize={currentFontSize}
             fontFamily={currentFontFamily}
