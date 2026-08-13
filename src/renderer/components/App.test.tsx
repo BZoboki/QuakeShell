@@ -12,8 +12,23 @@ vi.mock('./ShellPicker/ShellPicker', () => ({
 }));
 
 vi.mock('./SplitPane', () => ({
-  default: ({ tabIds, focusedPaneTabId }: { tabIds: string[]; focusedPaneTabId: string }) => (
-    <div data-testid="split-pane">{`${tabIds.join('|')}|${focusedPaneTabId}`}</div>
+  default: ({
+    tabIds,
+    visibleTabIds = tabIds,
+    focusedPaneTabId,
+  }: {
+    tabIds: string[];
+    visibleTabIds?: string[];
+    focusedPaneTabId: string | null;
+  }) => (
+    <div
+      data-testid="split-pane"
+      data-terminal-tab-ids={tabIds.join('|')}
+      data-visible-tab-ids={visibleTabIds.join('|')}
+      data-focused-pane-id={focusedPaneTabId ?? ''}
+    >
+      {`${visibleTabIds.join('|')}|${focusedPaneTabId}`}
+    </div>
   ),
 }));
 
@@ -168,6 +183,74 @@ describe('renderer/App hover tab linking', () => {
   afterEach(() => {
     render(null, container);
     container.remove();
+  });
+
+  it('hosts every running tab while displaying only the active tab', async () => {
+    await act(async () => {
+      render(<App />, container);
+    });
+    await flushPromises();
+
+    const terminalHost = container.querySelector('[data-testid="split-pane"]');
+
+    expect(terminalHost?.getAttribute('data-terminal-tab-ids')).toBe('tab-1|tab-2|tab-3');
+    expect(terminalHost?.getAttribute('data-visible-tab-ids')).toBe('tab-1');
+  });
+
+  it('changes visible panes without replacing the persistent terminal set', async () => {
+    await act(async () => {
+      render(<App />, container);
+    });
+    await flushPromises();
+
+    const terminalHost = container.querySelector('[data-testid="split-pane"]');
+
+    await act(async () => {
+      activeChangedListener?.({ tabId: 'tab-2' });
+    });
+    await flushPromises();
+
+    const switchedTerminalHost = container.querySelector('[data-testid="split-pane"]');
+    expect(switchedTerminalHost).toBe(terminalHost);
+    expect(switchedTerminalHost?.getAttribute('data-terminal-tab-ids')).toBe('tab-1|tab-2|tab-3');
+    expect(switchedTerminalHost?.getAttribute('data-visible-tab-ids')).toBe('tab-2');
+  });
+
+  it('keeps running terminals mounted while a pending tab shows the shell picker', async () => {
+    const tabsWithPending = [
+      tabs[0],
+      { ...tabs[1], status: 'pending' },
+      tabs[2],
+    ];
+    mockTabAPI.list.mockResolvedValue(tabsWithPending);
+
+    await act(async () => {
+      render(<App />, container);
+    });
+    await flushPromises();
+
+    const terminalHost = container.querySelector('[data-testid="split-pane"]');
+
+    await act(async () => {
+      activeChangedListener?.({ tabId: 'tab-2' });
+    });
+    await flushPromises();
+
+    const hiddenTerminalHost = container.querySelector('[data-testid="split-pane"]');
+    expect(container.querySelector('[data-testid="picker-tab-2"]')).not.toBeNull();
+    expect(hiddenTerminalHost).toBe(terminalHost);
+    expect(hiddenTerminalHost?.getAttribute('data-terminal-tab-ids')).toBe('tab-1|tab-3');
+    expect(hiddenTerminalHost?.getAttribute('data-visible-tab-ids')).toBe('');
+    expect(hiddenTerminalHost?.getAttribute('data-focused-pane-id')).toBe('');
+
+    await act(async () => {
+      activeChangedListener?.({ tabId: 'tab-1' });
+    });
+    await flushPromises();
+
+    const revealedTerminalHost = container.querySelector('[data-testid="split-pane"]');
+    expect(revealedTerminalHost).toBe(terminalHost);
+    expect(revealedTerminalHost?.getAttribute('data-visible-tab-ids')).toBe('tab-1');
   });
 
   it('links adjacent standalone tabs from the hover gap', async () => {
@@ -400,6 +483,7 @@ describe('renderer/App hover tab linking', () => {
 
     const beforeDisconnect = container.querySelector('[data-testid="split-pane"]');
     expect(beforeDisconnect?.textContent).toBe('tab-3|tab-4|tab-4');
+    expect(beforeDisconnect?.getAttribute('data-terminal-tab-ids')).toBe('tab-1|tab-2|tab-3|tab-4');
 
     await act(async () => {
       closedListener?.({ tabId: 'tab-4' });
@@ -413,6 +497,7 @@ describe('renderer/App hover tab linking', () => {
     // so the real TerminalView/xterm.js instance inside it would survive.
     expect(afterDisconnect).toBe(beforeDisconnect);
     expect(afterDisconnect?.textContent).toBe('tab-3|tab-3');
+    expect(afterDisconnect?.getAttribute('data-terminal-tab-ids')).toBe('tab-1|tab-2|tab-3');
   });
 
   it('refreshes the tab list when the active tab was created outside the renderer flow', async () => {

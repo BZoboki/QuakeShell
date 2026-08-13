@@ -119,7 +119,15 @@ vi.mock('../../theme/tokyo-night', () => ({
 import { activeTheme } from '../../state/theme-store';
 import { TerminalView } from './TerminalView';
 
-globalThis.ResizeObserver ??= class {
+let resizeObserverHandler: ResizeObserverCallback | null = null;
+let measuredWidth = 800;
+let measuredHeight = 600;
+
+globalThis.ResizeObserver = class {
+  constructor(callback: ResizeObserverCallback) {
+    resizeObserverHandler = callback;
+  }
+
   observe = vi.fn();
   unobserve = vi.fn();
   disconnect = vi.fn();
@@ -235,6 +243,21 @@ describe('renderer/TerminalView', () => {
     focusHandler = null;
     tabDataHandler = null;
     customKeyHandler = null;
+    resizeObserverHandler = null;
+    measuredWidth = 800;
+    measuredHeight = 600;
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      right: measuredWidth,
+      bottom: measuredHeight,
+      left: 0,
+      width: measuredWidth,
+      height: measuredHeight,
+      toJSON: () => ({}),
+    }));
 
     mockTerminalInstance.onData.mockImplementation((callback: (data: string) => void) => {
       terminalDataHandler = callback;
@@ -276,11 +299,20 @@ describe('renderer/TerminalView', () => {
       render(null, container);
     });
     container.remove();
+    vi.restoreAllMocks();
   });
 
   function mount(props: Partial<Parameters<typeof TerminalView>[0]> = {}) {
     act(() => {
-      render(<TerminalView tabId="default" {...props} />, container);
+      render(
+        <TerminalView
+          tabId="default"
+          isVisible
+          isFocused
+          {...props}
+        />,
+        container,
+      );
     });
   }
 
@@ -369,11 +401,172 @@ describe('renderer/TerminalView', () => {
     expect(mockTerminalInstance.write).toHaveBeenCalledTimes(1);
   });
 
-  it('registers resize handler to sync PTY dimensions', () => {
+  it('registers resize handler to sync PTY dimensions immediately', () => {
     mount();
+    mockTabAPI.resize.mockClear();
 
     terminalResizeHandler?.({ cols: 132, rows: 42 });
     expect(mockTabAPI.resize).toHaveBeenCalledWith('default', 132, 42);
+  });
+
+  it('forwards successive visible resizes without debouncing', () => {
+    mount();
+    mockTabAPI.resize.mockClear();
+
+    terminalResizeHandler?.({ cols: 80, rows: 24 });
+    terminalResizeHandler?.({ cols: 100, rows: 30 });
+    terminalResizeHandler?.({ cols: 132, rows: 42 });
+
+    expect(mockTabAPI.resize).toHaveBeenCalledTimes(3);
+    expect(mockTabAPI.resize).toHaveBeenCalledWith('default', 132, 42);
+  });
+
+  it('keeps writing tab data while hidden without fitting, resizing, or focusing', () => {
+    mount();
+    mount({ isVisible: false, isFocused: false });
+    mockFitAddonInstance.fit.mockClear();
+    mockTabAPI.resize.mockClear();
+    mockTerminalInstance.focus.mockClear();
+
+    tabDataHandler?.({ tabId: 'default', data: 'hidden output' });
+    terminalResizeHandler?.({ cols: 132, rows: 42 });
+    window.dispatchEvent(new Event('resize'));
+    resizeObserverHandler?.([], {} as ResizeObserver);
+    focusHandler?.();
+
+    expect(mockTerminalInstance.write).toHaveBeenCalledWith('hidden output');
+    expect(mockTerminalConstructor).toHaveBeenCalledTimes(1);
+    expect(mockFitAddonInstance.fit).not.toHaveBeenCalled();
+    expect(mockTabAPI.resize).not.toHaveBeenCalled();
+    expect(mockTerminalInstance.focus).not.toHaveBeenCalled();
+  });
+
+  it('skips fit, PTY resize, and focus when the visible host has no measurable size', () => {
+    measuredWidth = 0;
+    measuredHeight = 0;
+
+    mount();
+    terminalResizeHandler?.({ cols: 132, rows: 42 });
+    focusHandler?.();
+
+    expect(mockFitAddonInstance.fit).not.toHaveBeenCalled();
+    expect(mockTabAPI.resize).not.toHaveBeenCalled();
+    expect(mockTerminalInstance.focus).not.toHaveBeenCalled();
+  });
+
+  it('completes initial fit and focus when the visible host becomes measurable', () => {
+    measuredWidth = 0;
+    measuredHeight = 0;
+
+    mount();
+
+    measuredWidth = 800;
+    measuredHeight = 600;
+    resizeObserverHandler?.([], {} as ResizeObserver);
+
+    expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1);
+    expect(mockTerminalInstance.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('refits and focuses a hidden terminal after it becomes visible and measurable', () => {
+    mount({ isVisible: false, isFocused: false });
+
+    mount({ isVisible: true, isFocused: true });
+
+    expect(mockTerminalConstructor).toHaveBeenCalledTimes(1);
+    expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1);
+    expect(mockTerminalInstance.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for measurable dimensions before completing reveal fit and focus', () => {
+    mount({ isVisible: false, isFocused: false });
+    measuredWidth = 0;
+    measuredHeight = 0;
+
+    mount({ isVisible: true, isFocused: true });
+
+    expect(mockFitAddonInstance.fit).not.toHaveBeenCalled();
+    expect(mockTerminalInstance.focus).not.toHaveBeenCalled();
+
+    measuredWidth = 800;
+    measuredHeight = 600;
+    resizeObserverHandler?.([], {} as ResizeObserver);
+
+    expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1);
+    expect(mockTerminalInstance.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes deferred app focus after a zero-sized host becomes measurable', () => {
+    mount();
+    mockFitAddonInstance.fit.mockClear();
+    mockTerminalInstance.focus.mockClear();
+    measuredWidth = 0;
+    measuredHeight = 0;
+
+    focusHandler?.();
+    expect(mockTerminalInstance.focus).not.toHaveBeenCalled();
+
+    measuredWidth = 800;
+    measuredHeight = 600;
+    resizeObserverHandler?.([], {} as ResizeObserver);
+
+    expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1);
+    expect(mockTerminalInstance.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears deferred focus when app focus succeeds before resize observation', () => {
+    measuredWidth = 0;
+    measuredHeight = 0;
+    mount();
+
+    measuredWidth = 800;
+    measuredHeight = 600;
+    focusHandler?.();
+    resizeObserverHandler?.([], {} as ResizeObserver);
+
+    expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1);
+    expect(mockTerminalInstance.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes pending reveal fit and focus on window resize', () => {
+    mount({ isVisible: false, isFocused: false });
+    measuredWidth = 0;
+    measuredHeight = 0;
+
+    mount({ isVisible: true, isFocused: true });
+    measuredWidth = 800;
+    measuredHeight = 600;
+    window.dispatchEvent(new Event('resize'));
+
+    expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1);
+    expect(mockTerminalInstance.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards the dimensions emitted by a reveal-time fit to the PTY', () => {
+    mount({ isVisible: false, isFocused: false });
+    mockTabAPI.resize.mockClear();
+    mockFitAddonInstance.fit.mockImplementationOnce(() => {
+      terminalResizeHandler?.({ cols: 120, rows: 36 });
+    });
+
+    mount({ isVisible: true, isFocused: true });
+
+    expect(mockTabAPI.resize).toHaveBeenCalledTimes(1);
+    expect(mockTabAPI.resize).toHaveBeenCalledWith('default', 120, 36);
+  });
+
+  it('responds to app-level focus only when visible and focused', () => {
+    mount({ isVisible: true, isFocused: false });
+    mockTerminalInstance.focus.mockClear();
+
+    focusHandler?.();
+    expect(mockTerminalInstance.focus).not.toHaveBeenCalled();
+
+    mount({ isVisible: true, isFocused: true });
+    mockTerminalInstance.focus.mockClear();
+    focusHandler?.();
+
+    expect(mockTerminalInstance.focus).toHaveBeenCalledTimes(1);
   });
 
   it('accepts custom opacity, fontSize, fontFamily, and lineHeight props', () => {

@@ -469,6 +469,15 @@ export function App() {
   const currentFocusedPane = currentGroupTabIds.includes(focusedPaneTabId.value ?? '')
     ? focusedPaneTabId.value ?? displayTabId
     : displayTabId;
+  const terminalTabIds = tabList
+    .filter((tab) => tab.status !== 'pending')
+    .map((tab) => tab.id);
+  const visibleTerminalTabIds = showPicker
+    ? []
+    : currentGroupTabIds.filter((tabId) => terminalTabIds.includes(tabId));
+  const focusedTerminalPane = visibleTerminalTabIds.includes(currentFocusedPane ?? '')
+    ? currentFocusedPane
+    : visibleTerminalTabIds[0] ?? null;
   const visibleTabItems = buildVisibleTabItems(tabList);
   const getTabLabel = (tab: TabInfo) =>
     tab.manualName || (tab.status === 'pending' ? 'New Tab' : tab.shellType) || 'shell';
@@ -824,16 +833,11 @@ export function App() {
             onShellSelected={handleShellSelected}
           />
         )}
-        {/*
-          SplitPane now renders every displayed tab, not just linked groups --
-          for an ungrouped tab it renders a single full-width pane with no
-          divider, so the component type stays the same across link/disconnect
-          transitions and xterm.js instances are never remounted.
-        */}
-        {displayTabId && !showPicker && currentGroupTabIds.length > 0 && currentFocusedPane && (
+        {terminalTabIds.length > 0 && (
           <SplitPane
-            tabIds={currentGroupTabIds}
-            focusedPaneTabId={currentFocusedPane}
+            tabIds={terminalTabIds}
+            visibleTabIds={visibleTerminalTabIds}
+            focusedPaneTabId={focusedTerminalPane}
             onFocusPane={(id) => { focusedPaneTabId.value = id; }}
             opacity={currentOpacity}
             fontSize={currentFontSize}

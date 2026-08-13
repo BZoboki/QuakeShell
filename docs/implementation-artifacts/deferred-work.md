@@ -25,3 +25,11 @@ Pre-existing issues surfaced during code review but out of scope for the change 
 - source_spec: `docs/implementation-artifacts/spec-fix-split-view-scrolling.md`
   summary: `SplitPane.tsx` destructures its `focusedPaneTabId` prop as `_focusedPaneTabId` and never uses it — there is no visual affordance distinguishing the focused pane from the unfocused one in a split view.
   evidence: Confirmed via blind-hunter review of the split-view scrolling fix (2026-08-12); pre-existing in `SplitPane.tsx`, which this fix did not modify — surfaced incidentally while reviewing the render-unification diff.
+
+- source_spec: `docs/implementation-artifacts/spec-fix-split-terminal-history-lifetime.md`
+  summary: The opacity focus-fade integration test BrowserWindow mock lacks `hide()`, causing two otherwise unrelated full-suite tests to fail.
+  evidence: `npm test` and an isolated run of `src/main/opacity-focus-fade.integration.test.ts` both failed at `window-manager.ts` calling `win.hide()`; the terminal-history change modifies renderer files only.
+
+- source_spec: `docs/implementation-artifacts/spec-fix-split-terminal-history-lifetime.md`
+  summary: Repository-wide ESLint cannot establish a green baseline because existing alias-resolution and unrelated rule violations produce 25 errors and 80 warnings.
+  evidence: `npm run lint` failed without reporting any changed file, while scoped ESLint over all changed TypeScript files completed successfully with no output.

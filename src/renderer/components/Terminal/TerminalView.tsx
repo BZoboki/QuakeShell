@@ -34,8 +34,15 @@ function buildTerminalTheme(theme: ITheme | undefined): ITheme {
   };
 }
 
+function hasMeasurableDimensions(element: HTMLElement): boolean {
+  const { width, height } = element.getBoundingClientRect();
+  return width > 0 && height > 0;
+}
+
 export interface TerminalViewProps {
   tabId: string;
+  isVisible: boolean;
+  isFocused: boolean;
   opacity?: number;
   fontSize?: number;
   fontFamily?: string;
@@ -44,6 +51,8 @@ export interface TerminalViewProps {
 
 export function TerminalView({
   tabId,
+  isVisible,
+  isFocused,
   opacity,
   fontSize,
   fontFamily,
@@ -58,6 +67,16 @@ export function TerminalView({
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const sessionStateRef = useRef<SessionState>('running');
+  const isVisibleRef = useRef(isVisible);
+  const isFocusedRef = useRef(isFocused);
+  const previousVisibilityRef = useRef(isVisible);
+  const previousFocusRef = useRef(isFocused);
+  const pendingFocusRef = useRef(isVisible && isFocused);
+  const fitVisibleTerminalRef = useRef<(() => boolean) | null>(null);
+  const focusVisibleTerminalRef = useRef<(() => boolean) | null>(null);
+
+  isVisibleRef.current = isVisible;
+  isFocusedRef.current = isFocused;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -89,10 +108,32 @@ export function TerminalView({
 
     terminal.open(container);
 
+    const canUseTerminalLayout = () =>
+      isVisibleRef.current && hasMeasurableDimensions(container);
+    const fitVisibleTerminal = () => {
+      if (!canUseTerminalLayout()) return false;
+      fitAddon.fit();
+      return true;
+    };
+    const focusVisibleTerminal = () => {
+      if (!isFocusedRef.current || !canUseTerminalLayout()) return false;
+      terminal.focus();
+      return true;
+    };
+    const fitAndRestorePendingFocus = () => {
+      const fitted = fitVisibleTerminal();
+      if (fitted && pendingFocusRef.current && focusVisibleTerminal()) {
+        pendingFocusRef.current = false;
+      }
+    };
+
+    fitVisibleTerminalRef.current = fitVisibleTerminal;
+    focusVisibleTerminalRef.current = focusVisibleTerminal;
+
     // WebGL addon does not support allowTransparency — skip it.
     // Canvas renderer handles transparency correctly.
 
-    fitAddon.fit();
+    const fittedOnMount = fitVisibleTerminal();
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
@@ -119,22 +160,23 @@ export function TerminalView({
       },
     );
 
-    // Sync terminal dimensions with PTY on resize
+    // Sync terminal dimensions with PTY on resize.
     const resizeDisposable = terminal.onResize(
       ({ cols, rows }: { cols: number; rows: number }) => {
+        if (!canUseTerminalLayout()) return;
         window.quakeshell.tab.resize(tabId, cols, rows);
       },
     );
 
     // Handle window resize → refit terminal
     const handleResize = () => {
-      fitAddon.fit();
+      fitAndRestorePendingFocus();
     };
     window.addEventListener('resize', handleResize);
 
     // Also observe container size changes (e.g. split pane layout)
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
+      fitAndRestorePendingFocus();
     });
     resizeObserver.observe(container);
 
@@ -191,7 +233,9 @@ export function TerminalView({
     container.addEventListener('contextmenu', handleContextMenu);
 
     // Resize the PTY to match actual terminal dimensions
-    window.quakeshell.tab.resize(tabId, terminal.cols, terminal.rows);
+    if (fittedOnMount) {
+      window.quakeshell.tab.resize(tabId, terminal.cols, terminal.rows);
+    }
 
     // Listen for tab-scoped PTY exit events from the main process.
     const removeExitListener = window.quakeshell.tab.onExited(
@@ -202,12 +246,17 @@ export function TerminalView({
       },
     );
 
-    // Focus terminal on mount
-    terminal.focus();
+    if (focusVisibleTerminal()) {
+      pendingFocusRef.current = false;
+    }
 
     // Listen for focus IPC from main process (triggered after show animation)
     const removeFocusListener = window.quakeshell.terminal.onFocus(() => {
-      terminal.focus();
+      if (focusVisibleTerminal()) {
+        pendingFocusRef.current = false;
+      } else if (isVisibleRef.current && isFocusedRef.current) {
+        pendingFocusRef.current = true;
+      }
     });
 
     return () => {
@@ -223,9 +272,32 @@ export function TerminalView({
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
+      fitVisibleTerminalRef.current = null;
+      focusVisibleTerminalRef.current = null;
       sessionStateRef.current = 'running';
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- terminal created once, font updates handled separately
+  }, []);
+
+  useEffect(() => {
+    const becameVisible = isVisible && !previousVisibilityRef.current;
+    const becameFocused = isVisible && isFocused && !previousFocusRef.current;
+
+    if (!isVisible || !isFocused) {
+      pendingFocusRef.current = false;
+    } else if (becameVisible || becameFocused) {
+      pendingFocusRef.current = true;
+    }
+
+    if (becameVisible) {
+      fitVisibleTerminalRef.current?.();
+    }
+    if (pendingFocusRef.current && focusVisibleTerminalRef.current?.()) {
+      pendingFocusRef.current = false;
+    }
+
+    previousVisibilityRef.current = isVisible;
+    previousFocusRef.current = isFocused;
+  }, [isVisible, isFocused]);
 
   useSignalEffect(() => {
     const theme = activeTheme.value;
@@ -262,7 +334,7 @@ export function TerminalView({
     }
     if (changed) {
       terminal.refresh(0, Math.max(terminal.rows - 1, 0));
-      fitAddon.fit();
+      fitVisibleTerminalRef.current?.();
     }
   }, [liveFontSize, liveFontFamily, liveLineHeight]);
 
