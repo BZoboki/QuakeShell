@@ -44,6 +44,7 @@ describe('shared/channels', () => {
     expect(CHANNELS.TAB_RENAME).toBe('tab:rename');
     expect(CHANNELS.TAB_LIST).toBe('tab:list');
     expect(CHANNELS.TAB_CREATE_SPLIT).toBe('tab:create-split');
+    expect(CHANNELS.TAB_REFRESH_ENVIRONMENT).toBe('tab:refresh-environment');
     expect(CHANNELS.TAB_EXITED).toBe('tab:exited');
     expect(CHANNELS.TAB_AUTO_NAME).toBe('tab:auto-name');
   });

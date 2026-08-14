@@ -31,6 +31,10 @@ vi.mock('node:fs', () => ({
   existsSync: vi.fn(() => true),
 }));
 
+vi.mock('node:child_process', () => ({
+  execSync: vi.fn(),
+}));
+
 vi.mock('electron-log/main', () => {
   return {
     default: {
@@ -42,7 +46,7 @@ vi.mock('electron-log/main', () => {
 import * as nodePty from 'node-pty';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawn, spawnPty, write, resize, onData, onExit, onBell, destroy, normalizeWindowsSpawnEnv, resolveShellPath, setDefaultShell, getDefaultShell, _normalizeWindowsPathSegmentForComparison, _setRegistryPathCacheForTesting, _reset } from './terminal-manager';
+import { spawn, spawnPty, write, resize, onData, onExit, onBell, destroy, getEnvironmentRefreshCommand, normalizeWindowsSpawnEnv, resolveShellPath, setDefaultShell, getDefaultShell, _normalizeWindowsPathSegmentForComparison, _reset } from './terminal-manager';
 
 const originalSystemRoot = process.env.SystemRoot;
 const originalProcessorArchitew6432 = process.env.PROCESSOR_ARCHITEW6432;
@@ -110,15 +114,13 @@ describe('main/terminal-manager', () => {
       );
     });
 
-    it('spawns allowed shells: pwsh, cmd, bash, wsl', () => {
+    it('spawns absolute system shells for cmd and WSL', () => {
       const expected: Record<string, string> = {
-        pwsh: 'pwsh.exe',
         cmd: getSystemShellPath('cmd.exe'),
-        bash: 'bash.exe',
         wsl: getSystemShellPath('wsl.exe'),
       };
 
-      for (const shell of ['pwsh', 'cmd', 'bash', 'wsl']) {
+      for (const shell of ['cmd', 'wsl']) {
         vi.clearAllMocks();
         spawn(shell);
         expect(nodePty.spawn).toHaveBeenCalledWith(
@@ -126,6 +128,14 @@ describe('main/terminal-manager', () => {
           [],
           expect.any(Object),
         );
+        destroy();
+      }
+    });
+
+    it('launches pwsh and Git Bash by their exact supported aliases', () => {
+      for (const [shell, executable] of [['pwsh', 'pwsh.exe'], ['bash', 'bash.exe']] as const) {
+        spawn(shell);
+        expect(nodePty.spawn).toHaveBeenLastCalledWith(executable, [], expect.any(Object));
         destroy();
       }
     });
@@ -336,6 +346,53 @@ describe('main/terminal-manager', () => {
         }),
       );
     });
+
+    it('uses the supported pwsh and Git Bash aliases for tab-specific PTYs', () => {
+      const onDataCb = vi.fn();
+      const onExitCb = vi.fn();
+
+      spawnPty('pwsh', 80, 24, onDataCb, onExitCb);
+      expect(nodePty.spawn).toHaveBeenCalledWith(
+        'pwsh.exe',
+        [],
+        expect.any(Object),
+      );
+
+      vi.clearAllMocks();
+
+      spawnPty('bash', 80, 24, onDataCb, onExitCb);
+      expect(nodePty.spawn).toHaveBeenCalledWith(
+        'bash.exe',
+        [],
+        expect.any(Object),
+      );
+    });
+
+    it('retains WSL variables and a validated custom path for tab-specific PTYs', () => {
+      const onDataCb = vi.fn();
+      const onExitCb = vi.fn();
+
+      spawnPty('wsl', 80, 24, onDataCb, onExitCb);
+      expect(nodePty.spawn).toHaveBeenCalledWith(
+        getSystemShellPath('wsl.exe'),
+        [],
+        expect.objectContaining({
+          env: expect.objectContaining({
+            COLORTERM: 'truecolor',
+            TERM: 'xterm-256color',
+          }),
+        }),
+      );
+
+      vi.clearAllMocks();
+
+      spawnPty('C:\\Custom\\shell.exe', 80, 24, onDataCb, onExitCb);
+      expect(nodePty.spawn).toHaveBeenCalledWith(
+        'C:\\Custom\\shell.exe',
+        [],
+        expect.any(Object),
+      );
+    });
   });
 
   describe('setDefaultShell / getDefaultShell', () => {
@@ -377,6 +434,43 @@ describe('main/terminal-manager', () => {
     });
   });
 
+  describe('getEnvironmentRefreshCommand', () => {
+    it('returns scoped PowerShell templates for PowerShell aliases', () => {
+      const powershellCommand = getEnvironmentRefreshCommand('powershell');
+
+      expect(powershellCommand).toContain('& {');
+      expect(powershellCommand).toContain("GetEnvironmentVariable('Path', 'Machine')");
+      expect(powershellCommand).toContain("GetEnvironmentVariable('Path', 'User')");
+      expect(powershellCommand).toContain('ExpandEnvironmentVariables');
+      expect(powershellCommand).toContain('$env:Path');
+      expect(getEnvironmentRefreshCommand('pwsh')).toBe(powershellCommand);
+    });
+
+    it('returns a static cmd template that updates only the current cmd Path', () => {
+      const command = getEnvironmentRefreshCommand('cmd');
+
+      expect(command).toContain('for /f');
+      expect(command).toContain('call "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"');
+      expect(command).toContain('@set "Path=%P"');
+    });
+
+    it('returns a static Git Bash template that safely preserves POSIX entries', () => {
+      const command = getEnvironmentRefreshCommand('bash');
+
+      expect(command).toContain('local windows_path posix_path refreshed_path');
+      expect(command).toContain('"$SYSTEMROOT/System32/WindowsPowerShell/v1.0/powershell.exe"');
+      expect(command).toContain('/usr/bin/cygpath -p');
+      expect(command).toContain('/usr/bin/awk -F:');
+      expect(command).toContain('export PATH');
+    });
+
+    it('does not create commands for WSL, custom shells, or aliases with different casing', () => {
+      expect(getEnvironmentRefreshCommand('wsl')).toBeNull();
+      expect(getEnvironmentRefreshCommand('C:\\Tools\\shell.exe')).toBeNull();
+      expect(getEnvironmentRefreshCommand('PowerShell')).toBeNull();
+    });
+  });
+
   describe('WSL-specific environment variables', () => {
     it('passes COLORTERM and TERM env vars when spawning WSL', () => {
       spawn('wsl');
@@ -401,15 +495,6 @@ describe('main/terminal-manager', () => {
   });
 
   describe('normalizeWindowsSpawnEnv', () => {
-    beforeEach(() => {
-      // Force fallback to env-based PATH for most tests
-      _setRegistryPathCacheForTesting(null);
-    });
-
-    afterEach(() => {
-      _setRegistryPathCacheForTesting(undefined);
-    });
-
     it('preserves drive and UNC roots when normalizing path segments for comparison', () => {
       expect(_normalizeWindowsPathSegmentForComparison('C:\\')).toBe('c:\\');
       expect(_normalizeWindowsPathSegmentForComparison('C:')).toBe('c:.');
@@ -525,34 +610,6 @@ describe('main/terminal-manager', () => {
       expect(pathSegments).toContain('C:\\Program Files\\Git\\cmd');
     });
 
-    it('uses clean PATH from Windows registry when available, ignoring polluted env PATH', () => {
-      _setRegistryPathCacheForTesting(
-        'C:\\Windows\\System32;C:\\Windows;C:\\Users\\test\\AppData\\Local\\Volta\\bin;C:\\Program Files\\Git\\cmd',
-      );
-
-      const env = normalizeWindowsSpawnEnv({
-        Path: [
-          'C:\\Users\\test\\AppData\\Local\\Volta\\tools\\image\\node\\22.0.0',
-          'C:\\Users\\test\\AppData\\Local\\Volta\\tools\\image\\npm\\11.10.0\\bin',
-          'C:\\Users\\test\\AppData\\Local\\Volta\\bin',
-          'C:\\Windows\\System32',
-        ].join(path.win32.delimiter),
-        SystemRoot: 'C:\\Windows',
-        npm_lifecycle_event: 'postinstall',
-        npm_execpath: 'C:\\Users\\test\\AppData\\Local\\Volta\\tools\\image\\npm\\11.10.0\\bin\\npm-cli.js',
-      });
-
-      const pathSegments = env.Path.split(path.win32.delimiter);
-      // Registry PATH is used: no tool-image paths, Volta\bin present from registry
-      expect(pathSegments).toContain('C:\\Users\\test\\AppData\\Local\\Volta\\bin');
-      expect(pathSegments).toContain('C:\\Windows\\System32');
-      expect(pathSegments).toContain('C:\\Program Files\\Git\\cmd');
-      expect(pathSegments).not.toContain('C:\\Users\\test\\AppData\\Local\\Volta\\tools\\image\\node\\22.0.0');
-      expect(pathSegments).not.toContain('C:\\Users\\test\\AppData\\Local\\Volta\\tools\\image\\npm\\11.10.0\\bin');
-      // npm leaked vars still stripped
-      expect(env).not.toHaveProperty('npm_lifecycle_event');
-      expect(env).not.toHaveProperty('npm_execpath');
-    });
   });
 
   describe('spawn error handling', () => {

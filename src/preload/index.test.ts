@@ -35,6 +35,7 @@ interface QuakeShellAPIUnderTest {
     onFocus: (callback: () => void) => () => void;
   };
   tab: {
+    refreshEnvironment: (tabId: string) => Promise<unknown>;
     onData: (callback: (payload: { tabId: string; data: string }) => void) => () => void;
     onExited: (callback: (payload: { tabId: string; exitCode: number; signal: number }) => void) => () => void;
   };
@@ -65,6 +66,15 @@ describe('preload/index', () => {
     exposedApi.platform.isAcrylicSupported();
 
     expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.PLATFORM_IS_ACRYLIC_SUPPORTED);
+  });
+
+  it('bridges the tab-scoped environment refresh invoke without a command payload', () => {
+    exposedApi.tab.refreshEnvironment('tab-1');
+
+    expect(mockInvoke).toHaveBeenCalledWith(
+      CHANNELS.TAB_REFRESH_ENVIRONMENT,
+      { tabId: 'tab-1' },
+    );
   });
 
   it('bridges version and update-operation actions through the constrained app API', () => {

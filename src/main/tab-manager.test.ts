@@ -14,7 +14,10 @@ vi.mock('./terminal-manager', () => ({
   spawnPty: vi.fn(() => mockPty),
   writeToPty: vi.fn(),
   resizePty: vi.fn(),
-  killPty: vi.fn(),
+  killPty: vi.fn(() => true),
+  getEnvironmentRefreshCommand: vi.fn((shell: string) => (
+    ['powershell', 'pwsh', 'cmd', 'bash'].includes(shell) ? `refresh-${shell}` : null
+  )),
 }));
 
 // Mock electron
@@ -22,6 +25,20 @@ const mockSend = vi.fn();
 vi.mock('electron', () => ({
   BrowserWindow: vi.fn(),
 }));
+
+// Mock cwd-tracker
+const mockGetLastUsedDirectory = vi.fn<() => string | null>(() => null);
+vi.mock('./cwd-tracker', () => ({
+  recordUsedDirectory: vi.fn(),
+  getLastUsedDirectory: (...args: unknown[]) => mockGetLastUsedDirectory(...(args as [])),
+  createOscCwdScanner: vi.fn(() => vi.fn()),
+}));
+
+// Partial node:fs mock so existsSync can be controlled per test
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 vi.mock('electron-log/main', () => {
   const scopedLogger = {
@@ -43,9 +60,11 @@ vi.mock('node:crypto', () => ({
   randomUUID: vi.fn(() => `uuid-${++uuidCounter}`),
 }));
 
+import * as fs from 'node:fs';
 import * as terminalManager from './terminal-manager';
 import * as tabManager from './tab-manager';
 import * as windowManager from './window-manager';
+import { recordUsedDirectory } from './cwd-tracker';
 import { CHANNELS } from '@shared/channels';
 
 function createMockWindow() {
@@ -80,6 +99,7 @@ describe('main/tab-manager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     uuidCounter = 0;
+    mockGetLastUsedDirectory.mockReturnValue(null);
     tabManager._reset();
     mockWindow = createMockWindow();
     mockStore = createMockConfigStore();
@@ -149,6 +169,117 @@ describe('main/tab-manager', () => {
       );
     });
 
+    it('records an explicit cwd as the last used directory', async () => {
+      await tabManager.init(mockWindow as never, mockStore as never);
+
+      tabManager.createTab({ cwd: 'C:\\Projects\\QuakeShell' });
+
+      expect(recordUsedDirectory).toHaveBeenCalledWith('C:\\Projects\\QuakeShell');
+    });
+
+    it('spawns without cwd when startLocation is home (default)', async () => {
+      await tabManager.init(mockWindow as never, mockStore as never);
+
+      tabManager.createTab({});
+
+      expect(terminalManager.spawnPty).toHaveBeenLastCalledWith(
+        'powershell',
+        80,
+        24,
+        expect.any(Function),
+        expect.any(Function),
+        undefined,
+      );
+    });
+
+    it('uses the configured custom start directory for new tabs', async () => {
+      mockStore = createMockConfigStore({
+        terminal: { startLocation: 'custom', customStartDirectory: 'C:\\Projects' },
+      });
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      await tabManager.init(mockWindow as never, mockStore as never);
+
+      expect(terminalManager.spawnPty).toHaveBeenLastCalledWith(
+        'powershell',
+        80,
+        24,
+        expect.any(Function),
+        expect.any(Function),
+        'C:\\Projects',
+      );
+    });
+
+    it('falls back to home when the custom start directory does not exist', async () => {
+      mockStore = createMockConfigStore({
+        terminal: { startLocation: 'custom', customStartDirectory: 'C:\\Missing\\Dir' },
+      });
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      await tabManager.init(mockWindow as never, mockStore as never);
+
+      expect(terminalManager.spawnPty).toHaveBeenLastCalledWith(
+        'powershell',
+        80,
+        24,
+        expect.any(Function),
+        expect.any(Function),
+        undefined,
+      );
+    });
+
+    it('uses the last used directory when startLocation is lastUsed', async () => {
+      mockStore = createMockConfigStore({
+        terminal: { startLocation: 'lastUsed', customStartDirectory: '' },
+      });
+      mockGetLastUsedDirectory.mockReturnValue('C:\\Projects\\LastUsed');
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      await tabManager.init(mockWindow as never, mockStore as never);
+
+      expect(terminalManager.spawnPty).toHaveBeenLastCalledWith(
+        'powershell',
+        80,
+        24,
+        expect.any(Function),
+        expect.any(Function),
+        'C:\\Projects\\LastUsed',
+      );
+    });
+
+    it('falls back to home when lastUsed has no recorded directory', async () => {
+      mockStore = createMockConfigStore({
+        terminal: { startLocation: 'lastUsed', customStartDirectory: '' },
+      });
+      mockGetLastUsedDirectory.mockReturnValue(null);
+      await tabManager.init(mockWindow as never, mockStore as never);
+
+      expect(terminalManager.spawnPty).toHaveBeenLastCalledWith(
+        'powershell',
+        80,
+        24,
+        expect.any(Function),
+        expect.any(Function),
+        undefined,
+      );
+    });
+
+    it('explicit cwd always wins over the configured start location', async () => {
+      mockStore = createMockConfigStore({
+        terminal: { startLocation: 'custom', customStartDirectory: 'C:\\Projects' },
+      });
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      await tabManager.init(mockWindow as never, mockStore as never);
+
+      tabManager.createTab({ cwd: 'D:\\Explicit' });
+
+      expect(terminalManager.spawnPty).toHaveBeenLastCalledWith(
+        'powershell',
+        80,
+        24,
+        expect.any(Function),
+        expect.any(Function),
+        'D:\\Explicit',
+      );
+    });
+
     it('assigns colors cycling through palette', async () => {
       await tabManager.init(mockWindow as never, mockStore as never);
 
@@ -184,6 +315,41 @@ describe('main/tab-manager', () => {
         { tabId: tab2.id },
       );
       expect(tabManager.listTabs()).toHaveLength(1);
+    });
+
+    it('suppresses a delayed PTY exit after the tab has closed', async () => {
+      await tabManager.init(mockWindow as never, mockStore as never);
+      const tabId = tabManager.getActiveTabId()!;
+      const exitCallback = vi.mocked(terminalManager.spawnPty).mock.calls[0][4] as (
+        exitCode: number,
+        signal: number,
+      ) => void;
+
+      tabManager.closeTab(tabId);
+      mockSend.mockClear();
+      exitCallback(0, 0);
+
+      expect(mockSend).not.toHaveBeenCalledWith(
+        CHANNELS.TAB_EXITED,
+        expect.anything(),
+      );
+    });
+
+    it('suppresses delayed PTY data after the tab has closed', async () => {
+      await tabManager.init(mockWindow as never, mockStore as never);
+      const tabId = tabManager.getActiveTabId()!;
+      const dataCallback = vi.mocked(terminalManager.spawnPty).mock.calls[0][3] as (
+        data: string,
+      ) => void;
+
+      tabManager.closeTab(tabId);
+      mockSend.mockClear();
+      dataCallback('late output');
+
+      expect(mockSend).not.toHaveBeenCalledWith(
+        CHANNELS.TAB_DATA,
+        { tabId, data: 'late output' },
+      );
     });
 
     it('throws for non-existent tab', async () => {
@@ -328,6 +494,99 @@ describe('main/tab-manager', () => {
     it('throws for non-existent tab', async () => {
       await tabManager.init(mockWindow as never, mockStore as never);
       expect(() => tabManager.resizeTab('bad', 80, 24)).toThrowError('Tab not found: bad');
+    });
+  });
+
+  describe('refreshEnvironment()', () => {
+    it('writes the trusted command and Enter to the exact running PTY without changing lifecycle state', async () => {
+      const firstPty = { ...mockPty, pid: 10000 };
+      const focusedPty = { ...mockPty, pid: 10001 };
+      vi.mocked(terminalManager.spawnPty)
+        .mockReturnValueOnce(firstPty)
+        .mockReturnValueOnce(focusedPty);
+
+      await tabManager.init(mockWindow as never, mockStore as never);
+      const focusedTab = tabManager.createTab({ shellType: 'cmd', cwd: 'C:\\Projects\\Focused' });
+      tabManager.renameTab(focusedTab.id, 'Focused Terminal');
+      tabManager.resizeTab(focusedTab.id, 120, 40);
+      const tabsBeforeRefresh = tabManager.listTabs();
+      const activeTabBeforeRefresh = tabManager.getActiveTabId();
+      mockSend.mockClear();
+      vi.mocked(terminalManager.spawnPty).mockClear();
+      vi.mocked(terminalManager.killPty).mockClear();
+      vi.mocked(terminalManager.writeToPty).mockClear();
+
+      tabManager.refreshEnvironment(focusedTab.id);
+
+      expect(terminalManager.getEnvironmentRefreshCommand).toHaveBeenCalledWith('cmd');
+      expect(terminalManager.writeToPty).toHaveBeenCalledWith(focusedPty, 'refresh-cmd\r');
+      expect(terminalManager.spawnPty).not.toHaveBeenCalled();
+      expect(terminalManager.killPty).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(tabManager.listTabs()).toEqual(tabsBeforeRefresh);
+      expect(tabManager.getActiveTabId()).toBe(activeTabBeforeRefresh);
+    });
+
+    it('rejects a missing tab before looking up a command or writing to a PTY', () => {
+      expect(() => tabManager.refreshEnvironment('missing-tab')).toThrow('Tab not found: missing-tab');
+      expect(terminalManager.getEnvironmentRefreshCommand).not.toHaveBeenCalled();
+      expect(terminalManager.writeToPty).not.toHaveBeenCalled();
+    });
+
+    it('rejects pending and exited tabs without mutating their PTYs or status', async () => {
+      await tabManager.init(mockWindow as never, mockStore as never);
+      const pendingTab = tabManager.createTab({ deferred: true });
+      const exitedTab = tabManager.createTab({});
+      const exitCallback = vi.mocked(terminalManager.spawnPty).mock.calls[1][4] as (
+        exitCode: number,
+        signal: number,
+      ) => void;
+      exitCallback(0, 0);
+      vi.mocked(terminalManager.writeToPty).mockClear();
+      vi.mocked(terminalManager.killPty).mockClear();
+
+      expect(() => tabManager.refreshEnvironment(pendingTab.id)).toThrow(
+        'Terminal environment refresh is only available for a running tab',
+      );
+      expect(() => tabManager.refreshEnvironment(exitedTab.id)).toThrow(
+        'Terminal environment refresh is only available for a running tab',
+      );
+      expect(terminalManager.writeToPty).not.toHaveBeenCalled();
+      expect(terminalManager.killPty).not.toHaveBeenCalled();
+      expect(tabManager.listTabs()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: pendingTab.id, status: 'pending' }),
+        expect.objectContaining({ id: exitedTab.id, status: 'exited' }),
+      ]));
+    });
+
+    it('rejects WSL and custom shell tabs without sending terminal input', async () => {
+      await tabManager.init(mockWindow as never, mockStore as never);
+      const wslTab = tabManager.createTab({ shellType: 'wsl' });
+      const customShellTab = tabManager.createTab({ shellType: 'C:\\Tools\\shell.exe' });
+      vi.mocked(terminalManager.writeToPty).mockClear();
+
+      expect(() => tabManager.refreshEnvironment(wslTab.id)).toThrow(
+        'Terminal environment refresh is unavailable for this shell',
+      );
+      expect(() => tabManager.refreshEnvironment(customShellTab.id)).toThrow(
+        'Terminal environment refresh is unavailable for this shell',
+      );
+      expect(terminalManager.writeToPty).not.toHaveBeenCalled();
+    });
+
+    it('propagates a failed PTY write without changing tab state', async () => {
+      await tabManager.init(mockWindow as never, mockStore as never);
+      const tabId = tabManager.getActiveTabId()!;
+      const tabsBeforeRefresh = tabManager.listTabs();
+      vi.mocked(terminalManager.writeToPty).mockImplementationOnce(() => {
+        throw new Error('PTY write failed');
+      });
+      vi.mocked(terminalManager.killPty).mockClear();
+
+      expect(() => tabManager.refreshEnvironment(tabId)).toThrow('PTY write failed');
+      expect(tabManager.listTabs()).toEqual(tabsBeforeRefresh);
+      expect(terminalManager.spawnPty).toHaveBeenCalledTimes(1);
+      expect(terminalManager.killPty).not.toHaveBeenCalled();
     });
   });
 

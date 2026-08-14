@@ -122,6 +122,8 @@ contextBridge.exposeInMainWorld('quakeshell', {
       ipcRenderer.invoke(CHANNELS.TAB_INPUT, { tabId, data }),
     resize: (tabId: string, cols: number, rows: number) =>
       ipcRenderer.invoke(CHANNELS.TAB_RESIZE, { tabId, cols, rows }),
+    refreshEnvironment: (tabId: string) =>
+      ipcRenderer.invoke(CHANNELS.TAB_REFRESH_ENVIRONMENT, { tabId }),
     onData: (callback: (payload: TabDataPayload) => void) => subscribeToTabData(callback),
     onClosed: (callback: (payload: { tabId: string }) => void) => {
       const listener = (

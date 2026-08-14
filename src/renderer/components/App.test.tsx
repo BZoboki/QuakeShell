@@ -112,6 +112,7 @@ const mockTabAPI = {
       .filter((tab): tab is (typeof tabs)[number] => tab !== undefined)),
   input: vi.fn(),
   resize: vi.fn(),
+  refreshEnvironment: vi.fn().mockResolvedValue(undefined),
   onData: vi.fn(() => vi.fn()),
   onClosed: vi.fn((callback: (payload: { tabId: string }) => void) => {
     closedListener = callback;
@@ -174,6 +175,7 @@ describe('renderer/App hover tab linking', () => {
     closedListener = null;
     activeChangedListener = null;
     mockTabAPI.list.mockResolvedValue(tabs);
+    mockTabAPI.refreshEnvironment.mockResolvedValue(undefined);
     mockWindowAPI.openSettings.mockResolvedValue(undefined);
 
     container = document.createElement('div');
@@ -544,6 +546,132 @@ describe('renderer/App hover tab linking', () => {
     });
 
     expect(mockWindowAPI.openSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the focused pane before settings and prevents repeated clicks while invoking', async () => {
+    let completeRefresh: (() => void) | undefined;
+    linkedTabGroups.value = [['tab-1', 'tab-2']];
+    focusedPaneTabId.value = 'tab-2';
+    mockTabAPI.refreshEnvironment.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      completeRefresh = resolve;
+    }));
+
+    await act(async () => {
+      render(<App />, container);
+    });
+    await flushPromises();
+
+    const refreshButton = container.querySelector('[data-testid="refresh-environment"]') as HTMLButtonElement;
+    const settingsButton = container.querySelector('[aria-label="Open settings"]') as HTMLDivElement;
+
+    expect(refreshButton.nextElementSibling).toBe(settingsButton);
+    expect(refreshButton.title).toContain('Sends input');
+    expect(refreshButton.title).toContain('shell prompt');
+
+    await act(async () => {
+      refreshButton.click();
+      await Promise.resolve();
+    });
+
+    expect(mockTabAPI.refreshEnvironment).toHaveBeenCalledWith('tab-2');
+    expect(refreshButton.disabled).toBe(true);
+
+    await act(async () => {
+      refreshButton.click();
+    });
+    expect(mockTabAPI.refreshEnvironment).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      completeRefresh?.();
+      await Promise.resolve();
+    });
+    expect(refreshButton.disabled).toBe(false);
+  });
+
+  it('disables refresh for WSL, custom, pending, and exited tabs without invoking IPC', async () => {
+    const scenarios = [
+      {
+        tab: { ...tabs[0], shellType: 'wsl', status: 'running' },
+        message: 'WSL terminals',
+      },
+      {
+        tab: { ...tabs[0], shellType: 'C:\\Tools\\shell.exe', status: 'running' },
+        message: 'custom shells',
+      },
+      {
+        tab: { ...tabs[0], status: 'pending' },
+        message: 'starting',
+      },
+      {
+        tab: { ...tabs[0], status: 'exited' },
+        message: 'after this terminal exits',
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      mockTabAPI.list.mockResolvedValue([scenario.tab]);
+      await act(async () => {
+        render(<App />, container);
+      });
+      await flushPromises();
+
+      const refreshButton = container.querySelector('[data-testid="refresh-environment"]') as HTMLButtonElement;
+      expect(refreshButton.disabled).toBe(true);
+      expect(refreshButton.title).toContain(scenario.message);
+
+      await act(async () => {
+        refreshButton.click();
+      });
+      expect(mockTabAPI.refreshEnvironment).not.toHaveBeenCalled();
+
+      render(null, container);
+    }
+  });
+
+  it('keeps refresh disabled when the focused split pane is pending', async () => {
+    linkedTabGroups.value = [['tab-1', 'tab-2']];
+    focusedPaneTabId.value = 'tab-2';
+    mockTabAPI.list.mockResolvedValue([
+      tabs[0],
+      { ...tabs[1], status: 'pending' },
+    ]);
+
+    await act(async () => {
+      render(<App />, container);
+    });
+    await flushPromises();
+
+    const refreshButton = container.querySelector('[data-testid="refresh-environment"]') as HTMLButtonElement;
+    expect(refreshButton.disabled).toBe(true);
+    expect(refreshButton.title).toContain('while this terminal is starting');
+
+    await act(async () => {
+      refreshButton.click();
+    });
+
+    expect(mockTabAPI.refreshEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a refresh failure and re-enables the control without changing terminal hosts', async () => {
+    mockTabAPI.refreshEnvironment.mockRejectedValueOnce(new Error('Tab closed before refresh'));
+
+    await act(async () => {
+      render(<App />, container);
+    });
+    await flushPromises();
+
+    const terminalHost = container.querySelector('[data-testid="split-pane"]');
+    const refreshButton = container.querySelector('[data-testid="refresh-environment"]') as HTMLButtonElement;
+
+    await act(async () => {
+      refreshButton.click();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Tab closed before refresh');
+    expect(refreshButton.disabled).toBe(false);
+    expect(container.querySelector('[data-testid="split-pane"]')).toBe(terminalHost);
   });
 
   it('opens settings on Ctrl+,', async () => {

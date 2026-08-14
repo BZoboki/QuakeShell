@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
 import type { BrowserWindow } from 'electron';
 import type { IPty } from 'node-pty';
 import log from 'electron-log/main';
@@ -10,9 +11,15 @@ import type {
   TabCreateOptions,
   TabStatus,
 } from '@shared/ipc-types';
+import type { TerminalConfig } from '@shared/config-types';
 import type { ConfigStore } from './config-store';
 import * as terminalManager from './terminal-manager';
 import * as windowManager from './window-manager';
+import {
+  createOscCwdScanner,
+  getLastUsedDirectory,
+  recordUsedDirectory,
+} from './cwd-tracker';
 
 const logger = log.scope('tab-manager');
 
@@ -25,6 +32,8 @@ interface TabSession {
   manualName?: string;
   createdAt: number;
   cwd?: string;
+  cols: number;
+  rows: number;
 }
 
 const tabs = new Map<string, TabSession>();
@@ -74,6 +83,68 @@ function guardInitialWslFocusFade(shell: Shell): void {
   hasUsedInitialWslFocusFadeGuard = true;
 }
 
+/**
+ * Resolve the start directory for a tab launched without an explicit cwd,
+ * based on the `terminal.startLocation` config. Returns undefined for 'home'
+ * (and as fallback) so the PTY layer applies its user-profile default.
+ */
+function resolveStartDirectory(store: ConfigStore): string | undefined {
+  const terminalConfig = store.get('terminal') as TerminalConfig | undefined;
+  const startLocation = terminalConfig?.startLocation ?? 'home';
+  if (startLocation === 'home') {
+    return undefined;
+  }
+
+  const candidate = startLocation === 'custom'
+    ? (terminalConfig?.customStartDirectory ?? '').trim()
+    : (getLastUsedDirectory() ?? '');
+
+  if (!candidate) {
+    if (startLocation === 'lastUsed') {
+      logger.info('No last used directory recorded yet; falling back to home');
+    }
+    return undefined;
+  }
+
+  if (!fs.existsSync(candidate)) {
+    logger.warn(`Start directory does not exist: ${candidate}; falling back to home`);
+    return undefined;
+  }
+
+  return candidate;
+}
+
+function spawnSessionPty(session: TabSession): IPty {
+  let spawnedPty: IPty | null = null;
+  const scanForCwdReport = createOscCwdScanner((cwd) => recordUsedDirectory(cwd));
+
+  spawnedPty = terminalManager.spawnPty(
+    session.shellType,
+    session.cols,
+    session.rows,
+    (data: string) => {
+      if (session.ptyProcess !== spawnedPty) {
+        return;
+      }
+
+      scanForCwdReport(data);
+      broadcast(CHANNELS.TAB_DATA, { tabId: session.id, data });
+    },
+    (exitCode: number, signal: number) => {
+      if (session.ptyProcess !== spawnedPty) {
+        return;
+      }
+
+      session.ptyProcess = null;
+      session.status = 'exited';
+      broadcast(CHANNELS.TAB_EXITED, { tabId: session.id, exitCode, signal });
+    },
+    session.cwd,
+  );
+
+  return spawnedPty;
+}
+
 export async function init(
   window: BrowserWindow,
   store: ConfigStore,
@@ -95,40 +166,29 @@ export function createTab(options: TabCreateOptions): TabSessionDTO {
   const color = getNextColor();
   const createdAt = Date.now();
   const deferred = options.deferred ?? false;
-  const cwd = options.cwd;
-
-  let ptyProcess: IPty | null = null;
-  let status: TabStatus = 'pending';
-
-  if (!deferred) {
-    guardInitialWslFocusFade(shellType);
-    ptyProcess = terminalManager.spawnPty(
-      shellType,
-      80,
-      24,
-      (data: string) => {
-        broadcast(CHANNELS.TAB_DATA, { tabId: id, data });
-      },
-      (exitCode: number, signal: number) => {
-        const session = tabs.get(id);
-        if (session) session.status = 'exited';
-        broadcast(CHANNELS.TAB_EXITED, { tabId: id, exitCode, signal });
-      },
-      cwd,
-    );
-    status = 'running';
+  const cwd = options.cwd ?? resolveStartDirectory(getStore());
+  if (options.cwd) {
+    recordUsedDirectory(options.cwd);
   }
 
   const session: TabSession = {
     id,
     shellType,
-    status,
-    ptyProcess,
+    status: 'pending',
+    ptyProcess: null,
     color,
     manualName: undefined,
     createdAt,
     cwd,
+    cols: 80,
+    rows: 24,
   };
+
+  if (!deferred) {
+    guardInitialWslFocusFade(shellType);
+    session.ptyProcess = spawnSessionPty(session);
+    session.status = 'running';
+  }
 
   tabs.set(id, session);
   if (options.activate !== false) {
@@ -148,20 +208,7 @@ export function spawnTab(tabId: string, shellType?: Shell): TabSessionDTO {
   session.shellType = shell;
 
   guardInitialWslFocusFade(shell);
-  session.ptyProcess = terminalManager.spawnPty(
-    shell,
-    80,
-    24,
-    (data: string) => {
-      broadcast(CHANNELS.TAB_DATA, { tabId, data });
-    },
-    (exitCode: number, signal: number) => {
-      const s = tabs.get(tabId);
-      if (s) s.status = 'exited';
-      broadcast(CHANNELS.TAB_EXITED, { tabId, exitCode, signal });
-    },
-    session.cwd,
-  );
+  session.ptyProcess = spawnSessionPty(session);
   session.status = 'running';
   logger.info('Tab shell spawned', { tabId, shell });
 
@@ -174,8 +221,10 @@ export function closeTab(tabId: string): void {
     throw new Error(`Tab not found: ${tabId}`);
   }
 
-  if (session.ptyProcess) {
-    terminalManager.killPty(session.ptyProcess);
+  const ptyProcess = session.ptyProcess;
+  session.ptyProcess = null;
+  if (ptyProcess) {
+    terminalManager.killPty(ptyProcess);
   }
   tabs.delete(tabId);
   broadcast(CHANNELS.TAB_CLOSED, { tabId });
@@ -263,7 +312,33 @@ export function resizeTab(tabId: string, cols: number, rows: number): void {
   if (!session.ptyProcess) {
     return; // pending tab — nothing to resize
   }
+  session.cols = cols;
+  session.rows = rows;
   terminalManager.resizePty(session.ptyProcess, cols, rows);
+}
+
+export function refreshEnvironment(tabId: string): void {
+  const session = tabs.get(tabId);
+  if (!session) {
+    throw new Error(`Tab not found: ${tabId}`);
+  }
+
+  if (session.status !== 'running' || !session.ptyProcess) {
+    throw new Error('Terminal environment refresh is only available for a running tab');
+  }
+
+  const command = terminalManager.getEnvironmentRefreshCommand(session.shellType);
+  if (!command) {
+    throw new Error('Terminal environment refresh is unavailable for this shell');
+  }
+
+  try {
+    terminalManager.writeToPty(session.ptyProcess, `${command}\r`);
+    logger.info('Refreshed terminal environment in place', { tabId, shell: session.shellType });
+  } catch (error) {
+    logger.warn('Failed to refresh terminal environment in place', { tabId, error });
+    throw error;
+  }
 }
 
 export function getActiveTabId(): string | null {
@@ -273,9 +348,10 @@ export function getActiveTabId(): string | null {
 /** Kill all tab PTY processes — for use during app shutdown. */
 export function destroyAllTabs(): void {
   for (const session of tabs.values()) {
-    if (session.ptyProcess) {
-      terminalManager.killPty(session.ptyProcess);
-      session.ptyProcess = null;
+    const ptyProcess = session.ptyProcess;
+    session.ptyProcess = null;
+    if (ptyProcess) {
+      terminalManager.killPty(ptyProcess);
     }
   }
 }

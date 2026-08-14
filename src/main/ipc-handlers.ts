@@ -319,6 +319,20 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(
+    CHANNELS.TAB_REFRESH_ENVIRONMENT,
+    async (_event, { tabId }: { tabId: string }) => {
+      try {
+        tabManager.refreshEnvironment(tabId);
+      } catch (error) {
+        logger.error('tab:refresh-environment failed:', error);
+        throw new Error(
+          error instanceof Error ? error.message : 'Failed to refresh terminal environment',
+        );
+      }
+    },
+  );
+
+  ipcMain.handle(
     CHANNELS.TAB_SPAWN,
     async (_event, { tabId, shellType }: { tabId: string; shellType: string }) => {
       try {

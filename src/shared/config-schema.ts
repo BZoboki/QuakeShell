@@ -45,6 +45,18 @@ export const configSchema = z.object({
       maxTabs: z.number().int().min(1).max(20).default(10),
     })
     .default({}),
+  terminal: z
+    .object({
+      startLocation: z
+        .union([
+          z.literal('home'),
+          z.literal('lastUsed'),
+          z.literal('custom'),
+        ])
+        .default('home'),
+      customStartDirectory: z.string().default(''),
+    })
+    .default({}),
   acrylicBlur: z.boolean().default(false),
 });
 
