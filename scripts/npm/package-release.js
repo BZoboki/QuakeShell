@@ -201,6 +201,17 @@ function assertPackagedRendererPayload(packagedDirectory, options = {}) {
   return `${matchedRendererRoot}/index.html`;
 }
 
+function assertPackagedIconPayload(packagedDirectory, options = {}) {
+  const { asarPath, asarEntries } = readPackagedAsarEntries(packagedDirectory, options);
+  const iconPath = 'assets/icon.ico';
+
+  if (!asarEntries.includes(iconPath)) {
+    throw new Error(`Packaged QuakeShell app is missing ${iconPath} inside ${asarPath}.`);
+  }
+
+  return iconPath;
+}
+
 function assertPackagedNodePtyPayload(packagedDirectory, options = {}) {
   const platform = options.platform || SUPPORTED_PLATFORM;
   const arch = options.arch || SUPPORTED_ARCH;
@@ -372,6 +383,7 @@ async function buildReleaseAsset(options = {}) {
   });
   assertPackagedExecutableVersion(packagedDirectory, metadata, options.powerShellRunner || spawnSync);
   assertPackagedRendererPayload(packagedDirectory);
+  assertPackagedIconPayload(packagedDirectory);
   assertPackagedNodePtyPayload(packagedDirectory);
   const assetName = getAssetName(metadata, SUPPORTED_PLATFORM, SUPPORTED_ARCH);
   const assetPath = path.join(packageRoot, 'release', assetName);
@@ -409,6 +421,7 @@ if (require.main === module) {
 module.exports = {
   assertPackagedExecutableVersion,
   assertPackagedRendererPayload,
+  assertPackagedIconPayload,
   assertPackagedNodePtyPayload,
   buildReleaseAsset,
   computeFileSha256,

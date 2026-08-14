@@ -9,6 +9,14 @@ describe('forge rebuildConfig', () => {
   });
 });
 
+describe('forge packagerConfig', () => {
+  it('uses the root ICO as the Windows application icon', () => {
+    expect(config.packagerConfig).toMatchObject({
+      icon: './assets/icon.ico',
+    });
+  });
+});
+
 describe('forge ignoreNonPackagedRuntimeFiles', () => {
   it('preserves the source renderer build tree needed by packaged releases', () => {
     expect(ignoreNonPackagedRuntimeFiles('src')).toBe(false);
@@ -27,10 +35,15 @@ describe('forge ignoreNonPackagedRuntimeFiles', () => {
     expect(ignoreNonPackagedRuntimeFiles('C:/Temp/app/src/renderer')).toBe(false);
     expect(ignoreNonPackagedRuntimeFiles('C:/Temp/app/.vite/build/index.js')).toBe(false);
     expect(ignoreNonPackagedRuntimeFiles('C:/Temp/app/node_modules/node-pty/lib/index.js')).toBe(false);
+    expect(ignoreNonPackagedRuntimeFiles('C:/Temp/app/assets/icon.ico')).toBe(false);
+  });
+
+  it('preserves the root application icon needed by packaged releases', () => {
+    expect(ignoreNonPackagedRuntimeFiles('assets/icon.ico')).toBe(false);
   });
 
   it('still ignores unrelated absolute temp paths', () => {
     expect(ignoreNonPackagedRuntimeFiles('C:/Temp/app/src/main/index.ts')).toBe(true);
-    expect(ignoreNonPackagedRuntimeFiles('C:/Temp/app/assets/tray/icon.png')).toBe(true);
+    expect(ignoreNonPackagedRuntimeFiles('C:/Temp/app/assets/icon.png')).toBe(true);
   });
 });

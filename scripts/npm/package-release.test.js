@@ -5,6 +5,7 @@ const path = require('node:path');
 const {
   assertPackagedExecutableVersion,
   assertPackagedRendererPayload,
+  assertPackagedIconPayload,
   assertPackagedNodePtyPayload,
   normalizePathForComparison,
   resolvePackagedAppDir,
@@ -189,6 +190,42 @@ describe('scripts/npm/package-release', () => {
           '.vite/renderer/main_window/assets/index-legacy.js',
         ]),
       })).toBe('.vite/renderer/main_window/index.html');
+    } finally {
+      fs.rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('finds the root application icon in packaged output', () => {
+    const tempDirectory = createTempDirectory();
+    const packagedDirectory = path.join(tempDirectory, 'out', 'quakeshell-win32-x64');
+    const asarPath = path.join(packagedDirectory, 'resources', 'app.asar');
+
+    try {
+      fs.mkdirSync(path.dirname(asarPath), { recursive: true });
+      fs.writeFileSync(asarPath, 'asar-bytes', 'utf8');
+
+      expect(assertPackagedIconPayload(packagedDirectory, {
+        listPackageImpl: vi.fn(() => [
+          'assets/icon.ico',
+        ]),
+      })).toBe('assets/icon.ico');
+    } finally {
+      fs.rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails when packaged output is missing the root application icon', () => {
+    const tempDirectory = createTempDirectory();
+    const packagedDirectory = path.join(tempDirectory, 'out', 'quakeshell-win32-x64');
+    const asarPath = path.join(packagedDirectory, 'resources', 'app.asar');
+
+    try {
+      fs.mkdirSync(path.dirname(asarPath), { recursive: true });
+      fs.writeFileSync(asarPath, 'asar-bytes', 'utf8');
+
+      expect(() => assertPackagedIconPayload(packagedDirectory, {
+        listPackageImpl: vi.fn(() => []),
+      })).toThrow('missing assets/icon.ico inside');
     } finally {
       fs.rmSync(tempDirectory, { recursive: true, force: true });
     }

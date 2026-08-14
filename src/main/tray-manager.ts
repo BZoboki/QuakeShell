@@ -1,4 +1,4 @@
-import { Tray, Menu, app, dialog, nativeTheme, nativeImage, shell } from 'electron';
+import { Tray, Menu, app, dialog, nativeImage, shell } from 'electron';
 import path from 'node:path';
 import log from 'electron-log/main';
 import * as notificationManager from './notification-manager';
@@ -12,8 +12,7 @@ let getConfigPathFn: (() => string) | null = null;
 let shutdownCallback: (() => void) | null = null;
 
 function getIconPath(): string {
-  const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
-  return path.join(__dirname, `../../assets/tray/icon-${theme}.ico`);
+  return path.join(__dirname, '../../assets/icon.ico');
 }
 
 function buildContextMenu(): Menu {
@@ -87,15 +86,6 @@ export function createTray(optionsOrToggle: TrayOptions | (() => void)): Tray {
 
   tray.on('click', () => {
     toggleCallback?.();
-  });
-
-  // Swap icon on theme change
-  nativeTheme.on('updated', () => {
-    if (tray) {
-      const newIconPath = getIconPath();
-      tray.setImage(nativeImage.createFromPath(newIconPath));
-      logger.info(`Tray icon updated for ${nativeTheme.shouldUseDarkColors ? 'dark' : 'light'} theme`);
-    }
   });
 
   logger.info('Tray created');
