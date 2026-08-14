@@ -9,6 +9,7 @@ const mockRequestSingleInstanceLock = vi.fn(() => true);
 const mockSetLoginItemSettings = vi.fn();
 const mockAppOn = vi.fn();
 const mockAppOnce = vi.fn();
+let mockIsPackaged = false;
 const mockExistsSync = vi.fn(() => true);
 const mockHomedir = vi.fn(() => 'C:\\Users\\test');
 
@@ -20,6 +21,9 @@ vi.mock('electron', () => ({
     setLoginItemSettings: (...args: unknown[]) => mockSetLoginItemSettings(...args),
     on: (...args: unknown[]) => mockAppOn(...args),
     once: (...args: unknown[]) => mockAppOnce(...args),
+    get isPackaged() {
+      return mockIsPackaged;
+    },
   },
 }));
 
@@ -93,6 +97,7 @@ describe('main/app-lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRequestSingleInstanceLock.mockReturnValue(true);
+    mockIsPackaged = false;
     mockExistsSync.mockReturnValue(true);
   });
 
@@ -310,7 +315,9 @@ describe('main/app-lifecycle', () => {
   });
 
   describe('applyAutostart()', () => {
-    it('calls setLoginItemSettings with openAtLogin: true when enabled', () => {
+    it('enables the packaged QuakeShell login item when configured', () => {
+      mockIsPackaged = true;
+
       applyAutostart(true);
 
       expect(mockSetLoginItemSettings).toHaveBeenCalledWith({
@@ -319,10 +326,27 @@ describe('main/app-lifecycle', () => {
       });
     });
 
-    it('calls setLoginItemSettings with openAtLogin: false when disabled', () => {
+    it('removes the packaged QuakeShell login item when disabled', () => {
+      mockIsPackaged = true;
+
       applyAutostart(false);
 
       expect(mockSetLoginItemSettings).toHaveBeenCalledWith({
+        openAtLogin: false,
+        args: [],
+      });
+    });
+
+    it('removes the current development Electron login item regardless of configuration', () => {
+      applyAutostart(true);
+      applyAutostart(false);
+
+      expect(mockSetLoginItemSettings).toHaveBeenCalledTimes(2);
+      expect(mockSetLoginItemSettings).toHaveBeenNthCalledWith(1, {
+        openAtLogin: false,
+        args: [],
+      });
+      expect(mockSetLoginItemSettings).toHaveBeenNthCalledWith(2, {
         openAtLogin: false,
         args: [],
       });
@@ -331,6 +355,7 @@ describe('main/app-lifecycle', () => {
 
   describe('registerAutostartConfigHandler()', () => {
     it('registers a config change listener that triggers applyAutostart', () => {
+      mockIsPackaged = true;
       const mockOnDidChange = vi.fn();
       const mockConfigStore = {
         get: vi.fn(),
@@ -348,6 +373,32 @@ describe('main/app-lifecycle', () => {
       changeCallback('autostart', false, true);
 
       expect(mockSetLoginItemSettings).toHaveBeenCalledWith({
+        openAtLogin: false,
+        args: [],
+      });
+    });
+
+    it('keeps the unpackaged Electron runtime disabled on live autostart updates', () => {
+      const mockOnDidChange = vi.fn();
+      const mockConfigStore = {
+        get: vi.fn(),
+        set: vi.fn(),
+        getAll: vi.fn(),
+        onDidChange: mockOnDidChange,
+      };
+
+      registerAutostartConfigHandler(mockConfigStore);
+
+      const changeCallback = mockOnDidChange.mock.calls[0][0];
+      changeCallback('autostart', true, false);
+      changeCallback('autostart', false, true);
+
+      expect(mockSetLoginItemSettings).toHaveBeenCalledTimes(2);
+      expect(mockSetLoginItemSettings).toHaveBeenNthCalledWith(1, {
+        openAtLogin: false,
+        args: [],
+      });
+      expect(mockSetLoginItemSettings).toHaveBeenNthCalledWith(2, {
         openAtLogin: false,
         args: [],
       });
