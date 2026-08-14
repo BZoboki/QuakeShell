@@ -37,6 +37,7 @@ export const CHANNELS = {
   TAB_SPAWN: 'tab:spawn',
   TAB_AVAILABLE_SHELLS: 'tab:available-shells',
   TAB_CREATE_SPLIT: 'tab:create-split',
+  TAB_REFRESH_ENVIRONMENT: 'tab:refresh-environment',
   // Tab events (main → renderer, send)
   TAB_CLOSED: 'tab:closed',
   TAB_ACTIVE_CHANGED: 'tab:active-changed',

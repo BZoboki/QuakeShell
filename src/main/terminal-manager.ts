@@ -1,7 +1,7 @@
 import * as nodePty from 'node-pty';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import log from 'electron-log/main';
 
 const logger = log.scope('terminal-manager');
@@ -23,6 +23,8 @@ const WINDOWS_SYSTEM_SHELL_SEGMENTS: Partial<Record<AllowedShell, string[]>> = {
   cmd: ['cmd.exe'],
   wsl: ['wsl.exe'],
 };
+
+const WINDOWS_PATH_DELIMITER = path.win32.delimiter;
 
 /** Display info for each known shell */
 const SHELL_INFO: Record<AllowedShell, { label: string; icon: string }> = {
@@ -164,8 +166,6 @@ function normalizeWindowsPathSegment(segment: string): string {
   return comparableSegment.toLowerCase();
 }
 
-const WINDOWS_PATH_DELIMITER = path.win32.delimiter;
-
 function dedupeWindowsPathSegments(segments: string[]): string[] {
   const seen = new Set<string>();
   const dedupedSegments: string[] = [];
@@ -214,66 +214,27 @@ function deriveVoltaHomeFromPathSegments(segments: string[]): string | null {
   return null;
 }
 
-// ─── Clean PATH from Windows registry ───
+const POWERSHELL_PATH_REFRESH_TEMPLATE = '& { $machinePath = [Environment]::GetEnvironmentVariable(\'Path\', \'Machine\'); $userPath = [Environment]::GetEnvironmentVariable(\'Path\', \'User\'); $pathEntries = @(); if ($machinePath) { $pathEntries += [Environment]::ExpandEnvironmentVariables($machinePath) }; if ($userPath) { $pathEntries += [Environment]::ExpandEnvironmentVariables($userPath) }; $env:Path = [string]::Join(\';\', $pathEntries) }';
+const CMD_PATH_REFRESH_TEMPLATE = 'for /f "usebackq delims=" %P in (`call "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -Command "$machinePath=[Environment]::GetEnvironmentVariable(\'Path\', \'Machine\'); $userPath=[Environment]::GetEnvironmentVariable(\'Path\', \'User\'); $pathEntries=@(); if ($machinePath) { $pathEntries += [Environment]::ExpandEnvironmentVariables($machinePath) }; if ($userPath) { $pathEntries += [Environment]::ExpandEnvironmentVariables($userPath) }; [string]::Join(\';\', $pathEntries)"`) do @set "Path=%P"';
+const BASH_PATH_REFRESH_TEMPLATE = `__quakeshell_refresh_environment_path_8d726738() { local windows_path posix_path refreshed_path; windows_path="$("$SYSTEMROOT/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -Command '$machinePath=[Environment]::GetEnvironmentVariable("Path", "Machine"); $userPath=[Environment]::GetEnvironmentVariable("Path", "User"); $pathEntries=@(); if ($machinePath) { $pathEntries += [Environment]::ExpandEnvironmentVariables($machinePath) }; if ($userPath) { $pathEntries += [Environment]::ExpandEnvironmentVariables($userPath) }; [string]::Join(";", $pathEntries)')" || return; [ -n "$windows_path" ] || return; posix_path="$(/usr/bin/cygpath -p "$windows_path")" || return; [ -n "$posix_path" ] || return; refreshed_path="$(printf '%s:%s\\n' "$posix_path" "$PATH" | /usr/bin/awk -F: '{ for (segment = 1; segment <= NF; segment += 1) { if (!seen[$segment]++) { printf "%s%s", separator, $segment; separator = ":" } } print "" }')" || return; [ -n "$refreshed_path" ] || return; PATH="$refreshed_path"; export PATH; }; __quakeshell_refresh_environment_path_8d726738; unset -f __quakeshell_refresh_environment_path_8d726738`;
 
-const SYSTEM_PATH_REGISTRY_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment';
-const USER_PATH_REGISTRY_KEY = 'HKCU\\Environment';
+const ENVIRONMENT_REFRESH_TEMPLATES: Readonly<Record<
+  Extract<AllowedShell, 'powershell' | 'pwsh' | 'cmd' | 'bash'>,
+  string
+>> = {
+  powershell: POWERSHELL_PATH_REFRESH_TEMPLATE,
+  pwsh: POWERSHELL_PATH_REFRESH_TEMPLATE,
+  cmd: CMD_PATH_REFRESH_TEMPLATE,
+  bash: BASH_PATH_REFRESH_TEMPLATE,
+};
 
-let resolvedRegistryPath: string | null | undefined;
-
-function readWindowsRegistryValue(registryKey: string, valueName: string): string | null {
-  try {
-    const result = spawnSync('reg', ['query', registryKey, '/v', valueName], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      encoding: 'utf8',
-      timeout: 5000,
-      windowsHide: true,
-    });
-    if (result.status !== 0 || typeof result.stdout !== 'string') {
-      logger.warn('[env-diag] reg query failed for %s\\%s  status=%s', registryKey, valueName, result.status);
-      return null;
-    }
-    const match = result.stdout.match(/^\s+\S+\s+REG_(?:EXPAND_)?SZ\s+(.+?)$/m);
-    const value = match ? match[1].trim() : null;
-    return value;
-  } catch (err) {
-    logger.error('[env-diag] reg query threw for %s\\%s:', registryKey, valueName, err);
-    return null;
-  }
-}
-
-function expandWindowsEnvVars(
-  value: string,
-  env: Record<string, string | undefined>,
-): string {
-  return value.replace(/%([^%]+)%/g, (original, varName) => {
-    const expanded = env[varName];
-    return typeof expanded === 'string' ? expanded : original;
-  });
-}
-
-function getCleanWindowsPath(
-  env: Record<string, string | undefined>,
-): string | null {
-  if (resolvedRegistryPath !== undefined) {
-    return resolvedRegistryPath;
+/** Return a trusted in-place Windows PATH refresh command for a supported shell alias. */
+export function getEnvironmentRefreshCommand(shellConfig: string): string | null {
+  if (shellConfig === 'powershell' || shellConfig === 'pwsh' || shellConfig === 'cmd' || shellConfig === 'bash') {
+    return ENVIRONMENT_REFRESH_TEMPLATES[shellConfig];
   }
 
-  const systemPath = readWindowsRegistryValue(SYSTEM_PATH_REGISTRY_KEY, 'Path');
-  const userPath = readWindowsRegistryValue(USER_PATH_REGISTRY_KEY, 'Path');
-
-  if (!systemPath && !userPath) {
-    logger.warn('[env-diag] getCleanWindowsPath: both registry reads returned null → using fallback');
-    resolvedRegistryPath = null;
-    return null;
-  }
-
-  const parts: string[] = [];
-  if (systemPath) parts.push(expandWindowsEnvVars(systemPath, env));
-  if (userPath) parts.push(expandWindowsEnvVars(userPath, env));
-
-  resolvedRegistryPath = parts.join(WINDOWS_PATH_DELIMITER);
-  return resolvedRegistryPath;
+  return null;
 }
 
 // ─── Leaked npm / Volta environment cleanup ───
@@ -317,30 +278,20 @@ export function normalizeWindowsSpawnEnv(
     }
   }
 
-  // Prefer clean PATH from Windows registry — matches what a fresh terminal window receives.
-  // Falls back to merging PATH entries from the inherited environment when registry is unavailable.
-  const cleanPath = getCleanWindowsPath(env);
+  const pathSegments = Object.entries(env)
+    .filter(([key, value]) => key.toLowerCase() === 'path' && typeof value === 'string')
+    .sort(([leftKey], [rightKey]) => {
+      if (leftKey === 'Path') return -1;
+      if (rightKey === 'Path') return 1;
+      if (leftKey === 'PATH') return -1;
+      if (rightKey === 'PATH') return 1;
+      return leftKey.localeCompare(rightKey);
+    })
+    .flatMap(([, value]) => (value ? value.split(WINDOWS_PATH_DELIMITER) : []));
 
-  let pathSegments: string[];
-  if (cleanPath) {
-    pathSegments = cleanPath.split(WINDOWS_PATH_DELIMITER);
-  } else {
-    pathSegments = Object.entries(env)
-      .filter(([key, value]) => key.toLowerCase() === 'path' && typeof value === 'string')
-      .sort(([leftKey], [rightKey]) => {
-        if (leftKey === 'Path') return -1;
-        if (rightKey === 'Path') return 1;
-        if (leftKey === 'PATH') return -1;
-        if (rightKey === 'PATH') return 1;
-        return leftKey.localeCompare(rightKey);
-      })
-      .flatMap(([, value]) => (value ? value.split(WINDOWS_PATH_DELIMITER) : []));
-
-    // In the fallback path, ensure Volta shim directory has priority
-    const voltaHome = env.VOLTA_HOME?.trim() || deriveVoltaHomeFromPathSegments(pathSegments);
-    if (voltaHome) {
-      pathSegments.unshift(path.win32.join(voltaHome, 'bin'));
-    }
+  const voltaHome = env.VOLTA_HOME?.trim() || deriveVoltaHomeFromPathSegments(pathSegments);
+  if (voltaHome) {
+    pathSegments.unshift(path.win32.join(voltaHome, 'bin'));
   }
 
   const dedupedPathSegments = dedupeWindowsPathSegments(pathSegments);
@@ -393,6 +344,7 @@ export function spawn(shell: string, cols?: number, rows?: number): void {
     throw new Error(msg);
   }
 
+  const env = buildSpawnEnv(shell);
   const resolvedPath = resolveShellPath(shell);
 
   // Validate custom shell paths exist before spawning
@@ -419,8 +371,6 @@ export function spawn(shell: string, cols?: number, rows?: number): void {
   lastRows = spawnRows;
 
   try {
-    const env = buildSpawnEnv(shell);
-
     ptyProcess = nodePty.spawn(resolvedPath, [], {
       name: 'xterm-256color',
       cols: spawnCols,
@@ -530,14 +480,13 @@ export function spawnPty(
     throw new Error('Shell path must not be empty');
   }
 
+  const env = buildSpawnEnv(shellConfig);
   const resolvedPath = resolveShellPath(shellConfig);
 
   const validationError = validateCustomShellPath(shellConfig, resolvedPath);
   if (validationError) {
     throw new Error(validationError);
   }
-
-  const env = buildSpawnEnv(shellConfig);
 
   const pty = nodePty.spawn(resolvedPath, [], {
     name: 'xterm-256color',
@@ -582,8 +531,8 @@ export function resizePty(pty: nodePty.IPty, cols: number, rows: number): void {
 export function killPty(pty: nodePty.IPty): void {
   try {
     pty.kill();
-  } catch {
-    // process may already be dead
+  } catch (error) {
+    logger.warn('killPty failed (process may already be dead):', error);
   }
 }
 
@@ -617,11 +566,6 @@ export function getDefaultShell(): string {
 /** @internal For test use only */
 export function _normalizeWindowsPathSegmentForComparison(segment: string): string {
   return normalizeWindowsPathSegment(segment);
-}
-
-/** @internal For test use only — controls the cached registry PATH value */
-export function _setRegistryPathCacheForTesting(value: string | null | undefined): void {
-  resolvedRegistryPath = value;
 }
 
 /** @internal For test use only */

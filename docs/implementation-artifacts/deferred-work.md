@@ -33,3 +33,11 @@ Pre-existing issues surfaced during code review but out of scope for the change 
 - source_spec: `docs/implementation-artifacts/spec-fix-split-terminal-history-lifetime.md`
   summary: Repository-wide ESLint cannot establish a green baseline because existing alias-resolution and unrelated rule violations produce 25 errors and 80 warnings.
   evidence: `npm run lint` failed without reporting any changed file, while scoped ESLint over all changed TypeScript files completed successfully with no output.
+
+- source_spec: `docs/implementation-artifacts/spec-terminal-hot-reload.md`
+  summary: The shell picker can omit a newly installed pwsh or Git Bash because availability discovery still uses Electron's inherited parent PATH.
+  evidence: `getAvailableShells()` runs `where` before the fresh registry PATH environment used by terminal reload spawning is constructed.
+
+- source_spec: `docs/implementation-artifacts/spec-in-place-terminal-environment-refresh.md`
+  summary: The `bash` alias is labeled Git Bash but resolves the first `bash.exe` on the inherited PATH, so a non-Git Bash may be selected without the `/usr/bin/cygpath` contract used by in-place refresh.
+  evidence: `resolveAllowlistedShellPath('bash')` delegates to `bash.exe` path lookup without validating the Git-for-Windows runtime; the refresh template returns without mutating PATH when its bundled helpers are absent.

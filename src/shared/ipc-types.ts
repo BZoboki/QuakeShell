@@ -194,6 +194,7 @@ export interface QuakeShellTabAPI {
   list(): Promise<TabSessionDTO[]>;
   input(tabId: string, data: string): Promise<void>;
   resize(tabId: string, cols: number, rows: number): Promise<void>;
+  refreshEnvironment(tabId: string): Promise<void>;
   onData(callback: (payload: TabDataPayload) => void): () => void;
   onClosed(callback: (payload: TabClosedPayload) => void): () => void;
   onActiveChanged(callback: (payload: TabActiveChangedPayload) => void): () => void;

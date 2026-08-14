@@ -22,6 +22,7 @@ describe('shared/config-schema', () => {
           colorPalette: ['#7aa2f7', '#9ece6a', '#bb9af7', '#e0af68', '#7dcfff', '#f7768e'],
           maxTabs: 10,
         },
+        terminal: { startLocation: 'home' as const, customStartDirectory: '' },
         acrylicBlur: false,
       };
       const result = configSchema.safeParse(input);
@@ -53,6 +54,7 @@ describe('shared/config-schema', () => {
             colorPalette: ['#7aa2f7', '#9ece6a', '#bb9af7', '#e0af68', '#7dcfff', '#f7768e'],
             maxTabs: 10,
           },
+          terminal: { startLocation: 'home', customStartDirectory: '' },
           acrylicBlur: false,
         });
       }
@@ -171,6 +173,7 @@ describe('shared/config-schema', () => {
           colorPalette: ['#7aa2f7', '#9ece6a', '#bb9af7', '#e0af68', '#7dcfff', '#f7768e'],
           maxTabs: 10,
         },
+        terminal: { startLocation: 'home', customStartDirectory: '' },
         acrylicBlur: false,
       });
     });

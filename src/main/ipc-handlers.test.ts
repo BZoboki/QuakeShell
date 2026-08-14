@@ -160,6 +160,7 @@ vi.mock('./tab-manager', () => ({
   reorderTabs: vi.fn(() => []),
   listTabs: vi.fn(() => []),
   resizeTab: vi.fn(),
+  refreshEnvironment: vi.fn(),
 }));
 
 vi.mock('./theme-engine', () => ({
@@ -426,6 +427,27 @@ describe('main/ipc-handlers', () => {
       ]);
 
       expect(tabManager.reorderTabs).toHaveBeenCalledWith(['tab-3', 'tab-1']);
+    });
+  });
+
+  describe('tab:refresh-environment handler', () => {
+    it('forwards only the selected tab ID through the dedicated refresh channel', async () => {
+      await expect(
+        ipcMainHandlers[CHANNELS.TAB_REFRESH_ENVIRONMENT]({}, { tabId: 'mock-tab' }),
+      ).resolves.toBeUndefined();
+
+      expect(tabManager.refreshEnvironment).toHaveBeenCalledWith('mock-tab');
+      expect(ipcMainHandlers[CHANNELS.TERMINAL_RESPAWN]).toBeDefined();
+    });
+
+    it('propagates a refresh failure to the renderer', async () => {
+      vi.mocked(tabManager.refreshEnvironment).mockImplementationOnce(() => {
+        throw new Error('Tab closed before refresh');
+      });
+
+      await expect(
+        ipcMainHandlers[CHANNELS.TAB_REFRESH_ENVIRONMENT]({}, { tabId: 'mock-tab' }),
+      ).rejects.toThrow('Tab closed before refresh');
     });
   });
 

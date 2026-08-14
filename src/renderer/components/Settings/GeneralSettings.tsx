@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { DisplayInfo } from '@shared/ipc-types';
-import type { WindowConfig } from '@shared/config-types';
+import type { WindowConfig, TerminalConfig } from '@shared/config-types';
 import { hotkey as hotkeySignal } from '../../state/config-store';
 import { openSettings } from '../../state/settings-store';
 import SettingsRow from './SettingsRow';
@@ -30,6 +30,8 @@ function optionToMonitorValue(value: string): WindowConfig['monitor'] {
 export default function GeneralSettings() {
   const [shellSelection, setShellSelection] = useState<ShellSelection>('powershell');
   const [customShellPath, setCustomShellPath] = useState('');
+  const [startLocation, setStartLocation] = useState<TerminalConfig['startLocation']>('home');
+  const [customStartDir, setCustomStartDir] = useState('');
   const [focusFadeEnabled, setFocusFadeEnabled] = useState(false);
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [heightPercent, setHeightPercent] = useState(40);
@@ -50,6 +52,7 @@ export default function GeneralSettings() {
       window.quakeshell.config.get('focusFade'),
       window.quakeshell.config.get('autostart'),
       window.quakeshell.config.get('acrylicBlur'),
+      window.quakeshell.config.get('terminal'),
       window.quakeshell.display.getAll(),
       window.quakeshell.platform.isAcrylicSupported(),
     ]).then(([
@@ -59,6 +62,7 @@ export default function GeneralSettings() {
       focusFade,
       autostart,
       acrylicBlur,
+      terminalConfigValue,
       nextDisplays,
       acrylicSupported,
     ]) => {
@@ -79,6 +83,12 @@ export default function GeneralSettings() {
 
       setShellSelection(getShellSelection(shellValue));
       setCustomShellPath(BUILTIN_SHELLS.has(shellValue) ? '' : shellValue);
+      const terminalConfig = (terminalConfigValue as TerminalConfig | undefined) ?? {
+        startLocation: 'home',
+        customStartDirectory: '',
+      };
+      setStartLocation(terminalConfig.startLocation);
+      setCustomStartDir(terminalConfig.customStartDirectory);
       setFocusFadeEnabled(Boolean(focusFade));
       setAutostartEnabled(Boolean(autostart));
       setHeightPercent(effectiveHeight);
@@ -121,6 +131,27 @@ export default function GeneralSettings() {
     }
 
     await window.quakeshell.config.set('defaultShell', trimmedPath);
+  };
+
+  const updateTerminalConfig = async (nextTerminalConfig: Partial<TerminalConfig>) => {
+    const currentTerminal = await window.quakeshell.config.get('terminal') as TerminalConfig | undefined;
+
+    await window.quakeshell.config.set('terminal', {
+      startLocation: 'home',
+      customStartDirectory: '',
+      ...(currentTerminal ?? {}),
+      ...nextTerminalConfig,
+    });
+  };
+
+  const handleStartLocationChange = async (value: string) => {
+    const nextLocation = value as TerminalConfig['startLocation'];
+    setStartLocation(nextLocation);
+    await updateTerminalConfig({ startLocation: nextLocation });
+  };
+
+  const commitCustomStartDir = async () => {
+    await updateTerminalConfig({ customStartDirectory: customStartDir.trim() });
   };
 
   const handleHeightCommit = async (value: number) => {
@@ -185,6 +216,35 @@ export default function GeneralSettings() {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     void commitCustomShell();
+                  }
+                }}
+              />
+            ) : null}
+          </div>
+        </SettingsRow>
+
+        <SettingsRow label="Start Location" description="Directory new tabs start in. 'Last used' follows shells that report their directory (OSC 7/9;9) and 'Open QuakeShell here' launches.">
+          <div>
+            <select
+              className={styles.select}
+              value={startLocation}
+              onChange={(event) => { void handleStartLocationChange((event.target as HTMLSelectElement).value); }}
+            >
+              <option value="home">User home folder</option>
+              <option value="lastUsed">Last used directory</option>
+              <option value="custom">Custom directory</option>
+            </select>
+            {startLocation === 'custom' ? (
+              <input
+                type="text"
+                className={styles.customInput}
+                value={customStartDir}
+                placeholder="C:\Projects"
+                onInput={(event) => setCustomStartDir((event.target as HTMLInputElement).value)}
+                onBlur={() => { void commitCustomStartDir(); }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    void commitCustomStartDir();
                   }
                 }}
               />

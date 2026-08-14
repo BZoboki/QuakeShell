@@ -37,6 +37,33 @@ interface TabInfo {
   manualName?: string;
 }
 
+const ENVIRONMENT_REFRESHABLE_SHELLS = new Set(['powershell', 'pwsh', 'cmd', 'bash']);
+
+function getEnvironmentRefreshUnavailableReason(
+  tab: TabInfo | undefined,
+  hasFocusedLivePane: boolean,
+): string | null {
+  if (!tab) {
+    return 'In-place Windows PATH refresh is unavailable because no live terminal pane is focused.';
+  }
+  if (tab.status === 'pending') {
+    return 'In-place Windows PATH refresh is unavailable while this terminal is starting.';
+  }
+  if (tab.status === 'exited') {
+    return 'In-place Windows PATH refresh is unavailable after this terminal exits.';
+  }
+  if (tab.status !== 'running' || !hasFocusedLivePane) {
+    return 'In-place Windows PATH refresh is unavailable because no live terminal pane is focused.';
+  }
+  if (!ENVIRONMENT_REFRESHABLE_SHELLS.has(tab.shellType ?? '')) {
+    return tab.shellType === 'wsl'
+      ? 'In-place Windows PATH refresh is unavailable for WSL terminals.'
+      : 'In-place Windows PATH refresh is unavailable for custom shells.';
+  }
+
+  return null;
+}
+
 type VisibleTabItem =
   | { kind: 'single'; leadTabId: string; tabs: [TabInfo] }
   | { kind: 'group'; leadTabId: string; tabs: TabInfo[] };
@@ -132,6 +159,8 @@ export function App() {
   const [currentFontSize, setCurrentFontSize] = useState(14);
   const [currentFontFamily, setCurrentFontFamily] = useState('monospace');
   const [currentLineHeight, setCurrentLineHeight] = useState(1.2);
+  const [isRefreshingEnvironment, setIsRefreshingEnvironment] = useState(false);
+  const [environmentRefreshError, setEnvironmentRefreshError] = useState('');
   const tabListRef = useRef<TabInfo[]>([]);
 
   useEffect(() => {
@@ -478,9 +507,37 @@ export function App() {
   const focusedTerminalPane = visibleTerminalTabIds.includes(currentFocusedPane ?? '')
     ? currentFocusedPane
     : visibleTerminalTabIds[0] ?? null;
+  const refreshCandidateTab = tabList.find(
+    (tab) => tab.id === currentFocusedPane,
+  );
+  const environmentRefreshUnavailableReason = getEnvironmentRefreshUnavailableReason(
+    refreshCandidateTab,
+    currentFocusedPane !== null,
+  );
+  const environmentRefreshTargetTabId = environmentRefreshUnavailableReason
+    ? null
+    : refreshCandidateTab?.id ?? null;
+  const environmentRefreshTooltip = environmentRefreshUnavailableReason
+    ?? 'Sends input to refresh Windows PATH. This should be used at a shell prompt.';
   const visibleTabItems = buildVisibleTabItems(tabList);
   const getTabLabel = (tab: TabInfo) =>
     tab.manualName || (tab.status === 'pending' ? 'New Tab' : tab.shellType) || 'shell';
+
+  const handleEnvironmentRefresh = () => {
+    if (!environmentRefreshTargetTabId || isRefreshingEnvironment) {
+      return;
+    }
+
+    setIsRefreshingEnvironment(true);
+    setEnvironmentRefreshError('');
+    window.quakeshell.tab.refreshEnvironment(environmentRefreshTargetTabId)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Failed to refresh terminal environment.';
+        console.error('[App] tab.refreshEnvironment failed:', error);
+        setEnvironmentRefreshError(message);
+      })
+      .finally(() => setIsRefreshingEnvironment(false));
+  };
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -797,6 +854,51 @@ export function App() {
 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
+
+        {environmentRefreshError ? (
+          <span
+            role="alert"
+            title={environmentRefreshError}
+            style={{
+              color: '#f7768e',
+              fontSize: '11px',
+              maxWidth: '220px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Refresh failed: {environmentRefreshError}
+          </span>
+        ) : null}
+
+        <button
+          type="button"
+          data-testid="refresh-environment"
+          aria-label="Refresh terminal environment"
+          title={environmentRefreshTooltip}
+          disabled={isRefreshingEnvironment || environmentRefreshTargetTabId === null}
+          onClick={handleEnvironmentRefresh}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '26px',
+            height: '26px',
+            flexShrink: 0,
+            border: 'none',
+            borderRadius: '4px',
+            background: 'transparent',
+            padding: 0,
+            cursor: isRefreshingEnvironment || environmentRefreshTargetTabId === null ? 'default' : 'pointer',
+            color: 'color-mix(in srgb, var(--fg-primary) 70%, var(--fg-dimmed) 30%)',
+            fontSize: '17px',
+            lineHeight: 1,
+            opacity: isRefreshingEnvironment || environmentRefreshTargetTabId === null ? 0.4 : 0.7,
+          }}
+        >
+          <span aria-hidden="true">↻</span>
+        </button>
 
         {/* Settings button */}
         <div
