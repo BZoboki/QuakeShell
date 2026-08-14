@@ -393,7 +393,8 @@ describe('main/notification-manager', () => {
       expect(mockSpawn).toHaveBeenCalledWith(
         'npm.cmd',
         ['install', '-g', 'quakeshell@2.0.0'],
-        expect.objectContaining({ stdio: 'ignore', windowsHide: true }),
+        // shell: true is required on Windows for .cmd files (spawn EINVAL otherwise)
+        expect.objectContaining({ stdio: 'ignore', windowsHide: true, shell: true }),
       );
 
       installChild.emit('exit', 0);
@@ -532,6 +533,7 @@ describe('main/notification-manager', () => {
         expect.objectContaining({
           stdio: 'ignore',
           windowsHide: true,
+          shell: true,
         }),
       );
       expect(MockNotification).not.toHaveBeenCalled();

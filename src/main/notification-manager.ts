@@ -231,9 +231,14 @@ function runNpmInstall(version: string): Promise<void> {
   }
 
   const npmExecutable = process.platform === WINDOWS_PLATFORM ? 'npm.cmd' : 'npm';
+  // shell: true is required on Windows — spawning .cmd/.bat files without a shell
+  // throws `spawn EINVAL` since Node 20.12.2 (CVE-2024-27980). The version string
+  // is validated against SEMVER_PATTERN above, so no shell metacharacters can
+  // reach the command line.
   const child = spawn(npmExecutable, ['install', '-g', `${NPM_PACKAGE_NAME}@${version}`], {
     stdio: 'ignore',
     windowsHide: true,
+    shell: true,
   });
 
   return new Promise((resolve, reject) => {
