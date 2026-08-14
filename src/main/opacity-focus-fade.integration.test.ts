@@ -37,6 +37,7 @@ const mockSetBounds = vi.fn((b: Record<string, number>) => {
 const mockSetOpacity = vi.fn();
 const mockFocus = vi.fn();
 const mockShowInactive = vi.fn();
+const mockHide = vi.fn();
 const windowEventHandlers: Record<string, Array<(...args: unknown[]) => void>> = {};
 
 vi.mock('electron', () => {
@@ -51,6 +52,7 @@ vi.mock('electron', () => {
       loadFile: vi.fn(),
       focus: mockFocus,
       blur: vi.fn(),
+      hide: mockHide,
       showInactive: mockShowInactive,
       on: (event: string, handler: (...args: unknown[]) => void) => {
         if (!windowEventHandlers[event]) windowEventHandlers[event] = [];
@@ -62,6 +64,7 @@ vi.mock('electron', () => {
         }
       },
       setOpacity: mockSetOpacity,
+      isDestroyed: vi.fn(() => false),
       webContents: { send: vi.fn(), openDevTools: vi.fn() },
     };
   }
@@ -110,7 +113,7 @@ globalThis.MAIN_WINDOW_VITE_DEV_SERVER_URL = 'http://localhost:5173';
 globalThis.MAIN_WINDOW_VITE_NAME = 'main_window';
 
 import { createConfigStore } from './config-store';
-import { createWindow, show, hide, isVisible, setupFocusFade, teardownFocusFade, setOpacity, _reset } from './window-manager';
+import { createWindow, show, isVisible, setupFocusFade, teardownFocusFade, setOpacity, _reset } from './window-manager';
 
 function simulateWindowEvent(event: string): void {
   if (windowEventHandlers[event]) {
@@ -195,6 +198,7 @@ describe('integration: opacity and focus-fade', () => {
     await vi.runAllTimersAsync();
 
     expect(isVisible()).toBe(false);
+    expect(mockHide).toHaveBeenCalledTimes(1);
 
     // Show via toggle
     const show2 = show();
@@ -278,6 +282,7 @@ describe('integration: opacity and focus-fade', () => {
     await vi.runAllTimersAsync();
 
     expect(isVisible()).toBe(false);
+    expect(mockHide).toHaveBeenCalledTimes(1);
   });
 
   it('config hot-reload cycle: opacity change triggers immediate update', () => {

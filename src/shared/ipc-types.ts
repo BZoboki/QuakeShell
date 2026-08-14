@@ -80,6 +80,24 @@ export interface PendingUpdatePayload {
   source: 'background-install';
 }
 
+export type UpdateOperationPhase =
+  | 'checking'
+  | 'available'
+  | 'installing'
+  | 'ready-to-restart'
+  | 'up-to-date'
+  | 'error';
+
+export type UpdateOperationAction = 'install' | 'download' | 'restart' | null;
+
+export interface UpdateOperationState {
+  phase: UpdateOperationPhase;
+  currentVersion: string;
+  latestVersion: string | null;
+  action: UpdateOperationAction;
+  error?: string;
+}
+
 export interface QuakeShellTerminalAPI {
   spawn(cols: number, rows: number): Promise<void>;
   resize(cols: number, rows: number): Promise<void>;
@@ -208,6 +226,12 @@ export interface QuakeShellWindowAPI {
 
 export interface QuakeShellAppAPI {
   checkWSL(): Promise<boolean>;
+  getVersion(): Promise<string>;
+  getUpdateOperation(): Promise<UpdateOperationState | null>;
+  checkForUpdates(): Promise<UpdateOperationState | null>;
+  startAvailableUpdate(): Promise<UpdateOperationState | null>;
+  openAvailableUpdateDownload(): Promise<boolean>;
+  onUpdateOperationChanged(callback: (state: UpdateOperationState | null) => void): () => void;
   getPendingUpdate(): Promise<PendingUpdatePayload | null>;
   restartPendingUpdate(): Promise<boolean>;
   delayPendingUpdate(): Promise<PendingUpdatePayload | null>;

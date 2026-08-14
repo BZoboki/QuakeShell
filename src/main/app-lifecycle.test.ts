@@ -7,6 +7,7 @@ const mockQuit = vi.fn();
 const mockExit = vi.fn();
 const mockRequestSingleInstanceLock = vi.fn(() => true);
 const mockSetLoginItemSettings = vi.fn();
+const mockSetAppUserModelId = vi.fn();
 const mockAppOn = vi.fn();
 const mockAppOnce = vi.fn();
 let mockIsPackaged = false;
@@ -19,6 +20,7 @@ vi.mock('electron', () => ({
     quit: (...args: unknown[]) => mockQuit(...args),
     exit: (...args: unknown[]) => mockExit(...args),
     setLoginItemSettings: (...args: unknown[]) => mockSetLoginItemSettings(...args),
+    setAppUserModelId: (...args: unknown[]) => mockSetAppUserModelId(...args),
     on: (...args: unknown[]) => mockAppOn(...args),
     once: (...args: unknown[]) => mockAppOnce(...args),
     get isPackaged() {
@@ -37,10 +39,12 @@ vi.mock('node:os', () => ({
 
 const mockShow = vi.fn();
 const mockSetQuitting = vi.fn();
+const mockTeardownFocusFade = vi.fn();
 const mockGetWindow = vi.fn(() => null);
 vi.mock('./window-manager', () => ({
   show: (...args: unknown[]) => mockShow(...args),
   setQuitting: (...args: unknown[]) => mockSetQuitting(...args),
+  teardownFocusFade: (...args: unknown[]) => mockTeardownFocusFade(...args),
   getWindow: (...args: unknown[]) => mockGetWindow(...args),
 }));
 
@@ -92,6 +96,7 @@ import {
   flushPendingCwdLaunches,
   handleSquirrelLifecycle,
 } from './app-lifecycle';
+import { WINDOWS_APP_USER_MODEL_ID } from '../shared/constants';
 
 describe('main/app-lifecycle', () => {
   beforeEach(() => {
@@ -102,6 +107,21 @@ describe('main/app-lifecycle', () => {
   });
 
   describe('initAppLifecycle()', () => {
+    it('sets the Windows app identity before registering lifecycle handlers', () => {
+      initAppLifecycle('win32');
+
+      expect(mockSetAppUserModelId).toHaveBeenCalledWith(WINDOWS_APP_USER_MODEL_ID);
+      const identityCallOrder = mockSetAppUserModelId.mock.invocationCallOrder[0];
+      const firstHandlerCallOrder = mockAppOn.mock.invocationCallOrder[0];
+      expect(identityCallOrder).toBeLessThan(firstHandlerCallOrder);
+    });
+
+    it('does not set a Windows app identity on other platforms', () => {
+      initAppLifecycle('darwin');
+
+      expect(mockSetAppUserModelId).not.toHaveBeenCalled();
+    });
+
     it('calls app.requestSingleInstanceLock() as the first operation', () => {
       initAppLifecycle();
 
@@ -479,6 +499,18 @@ describe('main/app-lifecycle', () => {
       expect(() => gracefulShutdown()).not.toThrow();
     });
 
+    it('tears down focus fade when the main window is already destroyed', () => {
+      const mockClose = vi.fn();
+      mockGetWindow.mockReturnValueOnce({ isDestroyed: () => true, close: mockClose });
+
+      gracefulShutdown();
+
+      expect(mockTeardownFocusFade).toHaveBeenCalledTimes(1);
+      expect(mockClose).not.toHaveBeenCalled();
+      expect(mockDestroyTray).toHaveBeenCalled();
+      expect(mockQuit).toHaveBeenCalled();
+    });
+
     it('destroys the tray icon', () => {
       gracefulShutdown();
       expect(mockDestroyTray).toHaveBeenCalled();
@@ -489,7 +521,7 @@ describe('main/app-lifecycle', () => {
       expect(mockQuit).toHaveBeenCalled();
     });
 
-    it('executes shutdown steps in correct order: PTY kill → setQuitting → window close → tray destroy → quit', () => {
+    it('executes shutdown steps in correct order: PTY kill → setQuitting → focus-fade teardown → window close → tray destroy → quit', () => {
       const mockClose = vi.fn();
       mockGetWindow.mockReturnValueOnce({ isDestroyed: () => false, close: mockClose });
 
@@ -498,13 +530,16 @@ describe('main/app-lifecycle', () => {
       const tabsDestroyOrder = mockDestroyAllTabs.mock.invocationCallOrder[0];
       const destroyOrder = mockTerminalDestroy.mock.invocationCallOrder[0];
       const quittingOrder = mockSetQuitting.mock.invocationCallOrder[0];
+      const teardownOrder = mockTeardownFocusFade.mock.invocationCallOrder[0];
       const closeOrder = mockClose.mock.invocationCallOrder[0];
       const trayOrder = mockDestroyTray.mock.invocationCallOrder[0];
       const quitOrder = mockQuit.mock.invocationCallOrder[0];
 
       expect(tabsDestroyOrder).toBeLessThan(quittingOrder);
       expect(destroyOrder).toBeLessThan(quittingOrder);
-      expect(quittingOrder).toBeLessThan(closeOrder);
+      expect(quittingOrder).toBeLessThan(teardownOrder);
+      expect(teardownOrder).toBeLessThan(closeOrder);
+      expect(mockTeardownFocusFade).toHaveBeenCalledTimes(1);
       expect(closeOrder).toBeLessThan(trayOrder);
       expect(trayOrder).toBeLessThan(quitOrder);
     });

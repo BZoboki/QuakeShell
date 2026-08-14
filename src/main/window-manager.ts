@@ -380,6 +380,12 @@ async function animateHide(
 
   return new Promise((resolve) => {
     const interval = setInterval(() => {
+      if (isWindowUnavailable(window)) {
+        clearInterval(interval);
+        resolve();
+        return;
+      }
+
       const elapsed = performance.now() - startTime;
       const progress = Math.min(elapsed / duration, 1);
       const eased = easeInCubic(progress);
@@ -459,7 +465,8 @@ export async function show(): Promise<void> {
 }
 
 export async function hide(): Promise<void> {
-  if (!win || !visible || animating) return;
+  const targetWindow = win;
+  if (!targetWindow || isWindowUnavailable(targetWindow) || !visible || animating) return;
 
   closeSettingsWindow();
 
@@ -472,11 +479,11 @@ export async function hide(): Promise<void> {
     // Instant mode — no animation, no animating flag
     logger.info('Hide instant (animationSpeed=0)');
 
-    const bounds = win.getBounds();
-    win.setBounds({ ...bounds, y: bounds.y - bounds.height });
+    const bounds = targetWindow.getBounds();
+    targetWindow.setBounds({ ...bounds, y: bounds.y - bounds.height });
 
-    win.blur();
-    win.hide();
+    targetWindow.blur();
+    targetWindow.hide();
     visible = false;
     onStateChangeCallback?.(false);
     return;
@@ -488,11 +495,17 @@ export async function hide(): Promise<void> {
   logger.info('Hide animation starting');
   const hideStart = performance.now();
 
-  const bounds = win.getBounds();
-  await animateHide(win, bounds.y, bounds.height, hideDuration);
+  const bounds = targetWindow.getBounds();
+  await animateHide(targetWindow, bounds.y, bounds.height, hideDuration);
 
-  win.blur();
-  win.hide();
+  if (isWindowUnavailable(targetWindow)) {
+    visible = false;
+    animating = false;
+    return;
+  }
+
+  targetWindow.blur();
+  targetWindow.hide();
   visible = false;
   animating = false;
 

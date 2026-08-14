@@ -1,0 +1,48 @@
+.version {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.statusControl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.status {
+  color: var(--fg-dimmed);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.actionButton {
+  min-width: 132px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: #000000;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.actionButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.error {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 4px;
+  background: rgba(255, 107, 107, 0.1);
+  color: #ff6b6b;
+  font-size: 12px;
+}

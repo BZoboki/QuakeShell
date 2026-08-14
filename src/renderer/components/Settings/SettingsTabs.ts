@@ -1,4 +1,4 @@
-export type SettingsTab = 'general' | 'appearance' | 'themes' | 'keyboard' | 'distribution';
+export type SettingsTab = 'general' | 'appearance' | 'themes' | 'keyboard' | 'distribution' | 'updates';
 
 export const SETTINGS_TABS: SettingsTab[] = [
   'general',
@@ -6,6 +6,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   'themes',
   'keyboard',
   'distribution',
+  'updates',
 ];
 
 export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
@@ -14,4 +15,5 @@ export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
   themes: 'Themes',
   keyboard: 'Keyboard',
   distribution: 'Distribution',
+  updates: 'Updates',
 };

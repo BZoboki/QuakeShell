@@ -68,6 +68,11 @@ export const CHANNELS = {
   // App (placeholder — Story 3.1+)
   APP_QUIT: 'app:quit',
   APP_GET_VERSION: 'app:get-version',
+  APP_GET_UPDATE_OPERATION: 'app:get-update-operation',
+  APP_UPDATE_OPERATION_CHANGED: 'app:update-operation-changed',
+  APP_CHECK_FOR_UPDATES: 'app:check-for-updates',
+  APP_START_AVAILABLE_UPDATE: 'app:start-available-update',
+  APP_OPEN_AVAILABLE_UPDATE_DOWNLOAD: 'app:open-available-update-download',
   APP_CHECK_WSL: 'app:check-wsl',
   APP_GET_PENDING_UPDATE: 'app:get-pending-update',
   APP_UPDATE_READY: 'app:update-ready',

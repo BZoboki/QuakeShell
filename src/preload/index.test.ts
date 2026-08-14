@@ -38,6 +38,14 @@ interface QuakeShellAPIUnderTest {
     onData: (callback: (payload: { tabId: string; data: string }) => void) => () => void;
     onExited: (callback: (payload: { tabId: string; exitCode: number; signal: number }) => void) => () => void;
   };
+  app: {
+    getVersion: () => Promise<unknown>;
+    getUpdateOperation: () => Promise<unknown>;
+    checkForUpdates: () => Promise<unknown>;
+    startAvailableUpdate: () => Promise<unknown>;
+    openAvailableUpdateDownload: () => Promise<unknown>;
+    onUpdateOperationChanged: (callback: (payload: unknown) => void) => () => void;
+  };
 }
 
 describe('preload/index', () => {
@@ -57,6 +65,25 @@ describe('preload/index', () => {
     exposedApi.platform.isAcrylicSupported();
 
     expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.PLATFORM_IS_ACRYLIC_SUPPORTED);
+  });
+
+  it('bridges version and update-operation actions through the constrained app API', () => {
+    const listener = vi.fn();
+
+    exposedApi.app.getVersion();
+    exposedApi.app.getUpdateOperation();
+    exposedApi.app.checkForUpdates();
+    exposedApi.app.startAvailableUpdate();
+    exposedApi.app.openAvailableUpdateDownload();
+    const unsubscribe = exposedApi.app.onUpdateOperationChanged(listener);
+
+    expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.APP_GET_VERSION);
+    expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.APP_GET_UPDATE_OPERATION);
+    expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.APP_CHECK_FOR_UPDATES);
+    expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.APP_START_AVAILABLE_UPDATE);
+    expect(mockInvoke).toHaveBeenCalledWith(CHANNELS.APP_OPEN_AVAILABLE_UPDATE_DOWNLOAD);
+    expect(mockIpcOn).toHaveBeenCalledWith(CHANNELS.APP_UPDATE_OPERATION_CHANGED, expect.any(Function));
+    unsubscribe();
   });
 
   it('fans out persistent terminal channels through one Electron listener per channel', () => {
@@ -130,5 +157,27 @@ describe('preload/index', () => {
     secondUnsubscribe();
 
     expect(mockIpcRemoveListener).toHaveBeenCalledWith(CHANNELS.TERMINAL_FOCUS, focusListener);
+  });
+
+  it('removes the update-operation listener after its last subscriber unsubscribes', () => {
+    mockIpcOn.mockClear();
+    mockIpcRemoveListener.mockClear();
+
+    const firstUnsubscribe = exposedApi.app.onUpdateOperationChanged(vi.fn());
+    const secondUnsubscribe = exposedApi.app.onUpdateOperationChanged(vi.fn());
+    const listener = mockIpcOn.mock.calls.find(
+      ([channel]) => channel === CHANNELS.APP_UPDATE_OPERATION_CHANGED,
+    )?.[1] as ((event: unknown, state: unknown) => void);
+
+    expect(mockIpcOn).toHaveBeenCalledTimes(1);
+
+    firstUnsubscribe();
+    expect(mockIpcRemoveListener).not.toHaveBeenCalled();
+
+    secondUnsubscribe();
+    expect(mockIpcRemoveListener).toHaveBeenCalledWith(
+      CHANNELS.APP_UPDATE_OPERATION_CHANGED,
+      listener,
+    );
   });
 });
