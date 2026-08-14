@@ -106,7 +106,12 @@ function resolveStartDirectory(store: ConfigStore): string | undefined {
     return undefined;
   }
 
-  if (!fs.existsSync(candidate)) {
+  try {
+    if (!fs.statSync(candidate).isDirectory()) {
+      logger.warn(`Start directory is not a directory: ${candidate}; falling back to home`);
+      return undefined;
+    }
+  } catch {
     logger.warn(`Start directory does not exist: ${candidate}; falling back to home`);
     return undefined;
   }
