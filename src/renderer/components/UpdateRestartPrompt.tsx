@@ -3,6 +3,7 @@ import { APP_NAME } from '../../shared/constants';
 import {
   delayPendingUpdateRestart,
   initUpdateStore,
+  initUpdateOperationStore,
   isRestartPromptVisible,
   pendingUpdate,
   restartPendingUpdateNow,
@@ -21,6 +22,9 @@ export default function UpdateRestartPrompt() {
   useEffect(() => {
     void initUpdateStore().catch((error: unknown) => {
       console.error('[UpdateRestartPrompt] initUpdateStore failed:', error);
+    });
+    void initUpdateOperationStore().catch((error: unknown) => {
+      console.error('[UpdateRestartPrompt] initUpdateOperationStore failed:', error);
     });
   }, []);
 
@@ -117,7 +121,7 @@ export default function UpdateRestartPrompt() {
           Restart {APP_NAME} to apply the new build
         </h2>
         <p className={styles.body}>
-          Version <span className={styles.version}>{update.version}</span> finished installing in the background.
+          Version <span className={styles.version}>{update.version}</span> is installed and ready to apply.
           Restart now to switch over, or choose Later to keep the current terminal session intact.
         </p>
         <div className={styles.actions}>

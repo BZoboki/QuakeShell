@@ -91,6 +91,20 @@ export function broadcastConfigChange(
   }
 }
 
+function broadcastToLiveRendererWindows(channel: string, payload: unknown): void {
+  for (const targetWindow of BrowserWindow.getAllWindows()) {
+    try {
+      if (targetWindow.isDestroyed() || targetWindow.webContents.isDestroyed()) {
+        continue;
+      }
+
+      targetWindow.webContents.send(channel, payload);
+    } catch (error) {
+      logger.warn(`Failed to broadcast ${channel} to a renderer window:`, error);
+    }
+  }
+}
+
 export function registerIpcHandlers(
   configStore: ConfigStore,
   mainWindow: BrowserWindow,
@@ -632,6 +646,25 @@ export function registerIpcHandlers(
     }
   });
 
+  ipcMain.handle(CHANNELS.APP_GET_VERSION, async () => app.getVersion());
+
+  ipcMain.handle(CHANNELS.APP_GET_UPDATE_OPERATION, async () => {
+    return notificationManager.getUpdateOperationState();
+  });
+
+  ipcMain.handle(CHANNELS.APP_CHECK_FOR_UPDATES, async () => {
+    await notificationManager.checkForUpdates(true);
+    return notificationManager.getUpdateOperationState();
+  });
+
+  ipcMain.handle(CHANNELS.APP_START_AVAILABLE_UPDATE, async () => {
+    return notificationManager.startAvailableUpdate();
+  });
+
+  ipcMain.handle(CHANNELS.APP_OPEN_AVAILABLE_UPDATE_DOWNLOAD, async () => {
+    return notificationManager.openAvailableUpdateDownload();
+  });
+
   ipcMain.handle(CHANNELS.APP_GET_PENDING_UPDATE, async () => {
     return notificationManager.getPendingUpdate();
   });
@@ -646,18 +679,23 @@ export function registerIpcHandlers(
 
   const unsubscribePendingUpdate = notificationManager.onPendingUpdateChange((payload) => {
     try {
-      if (mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
-        return;
-      }
-
-      mainWindow.webContents.send(CHANNELS.APP_UPDATE_READY, payload);
+      broadcastToLiveRendererWindows(CHANNELS.APP_UPDATE_READY, payload);
     } catch (error) {
       logger.warn('app:update-ready broadcast failed:', error);
     }
   });
 
+  const unsubscribeUpdateOperation = notificationManager.onUpdateOperationChange((state) => {
+    try {
+      broadcastToLiveRendererWindows(CHANNELS.APP_UPDATE_OPERATION_CHANGED, state);
+    } catch (error) {
+      logger.warn('app:update-operation-changed broadcast failed:', error);
+    }
+  });
+
   mainWindow.once('closed', () => {
     unsubscribePendingUpdate();
+    unsubscribeUpdateOperation();
   });
 
   // Wire config hot-reload: broadcast changes to all renderer windows

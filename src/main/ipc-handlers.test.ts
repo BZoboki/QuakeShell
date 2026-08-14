@@ -5,8 +5,22 @@ type IpcHandler = (...args: unknown[]) => unknown;
 // Capture registered ipcMain handlers and terminal callbacks
 const ipcMainHandlers: Record<string, IpcHandler> = {};
 const mockWebContentsSend = vi.fn();
+const mockSettingsWebContentsSend = vi.fn();
 const mockGetAllWindows = vi.fn(() => [
-  { webContents: { send: mockWebContentsSend } },
+  {
+    isDestroyed: vi.fn(() => false),
+    webContents: {
+      send: mockWebContentsSend,
+      isDestroyed: vi.fn(() => false),
+    },
+  },
+  {
+    isDestroyed: vi.fn(() => false),
+    webContents: {
+      send: mockSettingsWebContentsSend,
+      isDestroyed: vi.fn(() => false),
+    },
+  },
 ]);
 
 // Track terminal-manager callbacks
@@ -14,11 +28,21 @@ let capturedOnExitCallback: ((exitCode: number, signal: number) => void) | null 
 let capturedPendingUpdateChangeCallback:
   | ((payload: { version: string; source: 'background-install' } | null) => void)
   | null = null;
+let capturedUpdateOperationChangeCallback:
+  | ((payload: {
+    phase: string;
+    currentVersion: string;
+    latestVersion: string | null;
+    action: string | null;
+    error?: string;
+  } | null) => void)
+  | null = null;
 
 const { mockElectronApp } = vi.hoisted(() => ({
   mockElectronApp: {
     getPath: vi.fn(() => 'C:\\Program Files\\QuakeShell\\quakeshell.exe'),
     getAppPath: vi.fn(() => 'C:\\Projects\\QuakeShell'),
+    getVersion: vi.fn(() => '1.0.19'),
     isPackaged: false,
   },
 }));
@@ -98,6 +122,20 @@ vi.mock('./app-lifecycle', () => ({
 
 vi.mock('./notification-manager', () => ({
   send: vi.fn(),
+  getUpdateOperationState: vi.fn(() => null),
+  checkForUpdates: vi.fn(() => Promise.resolve({})),
+  startAvailableUpdate: vi.fn(() => Promise.resolve(null)),
+  openAvailableUpdateDownload: vi.fn(() => Promise.resolve(false)),
+  onUpdateOperationChange: vi.fn((callback: (payload: {
+    phase: string;
+    currentVersion: string;
+    latestVersion: string | null;
+    action: string | null;
+    error?: string;
+  } | null) => void) => {
+    capturedUpdateOperationChangeCallback = callback;
+    return vi.fn();
+  }),
   getPendingUpdate: vi.fn(() => null),
   restartPendingUpdate: vi.fn(() => Promise.resolve(false)),
   delayPendingUpdate: vi.fn(() => null),
@@ -174,6 +212,7 @@ describe('main/ipc-handlers', () => {
     vi.clearAllMocks();
     capturedOnExitCallback = null;
     capturedPendingUpdateChangeCallback = null;
+    capturedUpdateOperationChangeCallback = null;
     mockElectronApp.isPackaged = false;
     Object.keys(ipcMainHandlers).forEach((key) => delete ipcMainHandlers[key]);
     registerIpcHandlers(mockConfigStore as unknown as ConfigStore, mockMainWindow);
@@ -227,6 +266,73 @@ describe('main/ipc-handlers', () => {
       expect(mockWebContentsSend).toHaveBeenCalledWith(CHANNELS.APP_UPDATE_READY, {
         version: '2.0.0',
         source: 'background-install',
+      });
+      expect(mockSettingsWebContentsSend).toHaveBeenCalledWith(CHANNELS.APP_UPDATE_READY, {
+        version: '2.0.0',
+        source: 'background-install',
+      });
+    });
+  });
+
+  describe('update operation IPC', () => {
+    it('returns the installed application version', async () => {
+      await expect(ipcMainHandlers[CHANNELS.APP_GET_VERSION]({})).resolves.toBe('1.0.19');
+    });
+
+    it('returns the current update operation state', async () => {
+      vi.mocked(notificationManager.getUpdateOperationState).mockReturnValueOnce({
+        phase: 'available',
+        currentVersion: '1.0.19',
+        latestVersion: '1.0.20',
+        action: 'install',
+      });
+
+      await expect(ipcMainHandlers[CHANNELS.APP_GET_UPDATE_OPERATION]({})).resolves.toEqual({
+        phase: 'available',
+        currentVersion: '1.0.19',
+        latestVersion: '1.0.20',
+        action: 'install',
+      });
+    });
+
+    it('runs a manual update check through the notification manager', async () => {
+      await ipcMainHandlers[CHANNELS.APP_CHECK_FOR_UPDATES]({});
+
+      expect(notificationManager.checkForUpdates).toHaveBeenCalledWith(true);
+    });
+
+    it('starts an available update and opens a validated download fallback', async () => {
+      await ipcMainHandlers[CHANNELS.APP_START_AVAILABLE_UPDATE]({});
+      await ipcMainHandlers[CHANNELS.APP_OPEN_AVAILABLE_UPDATE_DOWNLOAD]({});
+
+      expect(notificationManager.startAvailableUpdate).toHaveBeenCalledTimes(1);
+      expect(notificationManager.openAvailableUpdateDownload).toHaveBeenCalledTimes(1);
+    });
+
+    it('broadcasts update-operation changes to the renderer', () => {
+      expect(capturedUpdateOperationChangeCallback).not.toBeNull();
+
+      capturedUpdateOperationChangeCallback!({
+        phase: 'error',
+        currentVersion: '1.0.19',
+        latestVersion: null,
+        action: null,
+        error: 'Network error',
+      });
+
+      expect(mockWebContentsSend).toHaveBeenCalledWith(CHANNELS.APP_UPDATE_OPERATION_CHANGED, {
+        phase: 'error',
+        currentVersion: '1.0.19',
+        latestVersion: null,
+        action: null,
+        error: 'Network error',
+      });
+      expect(mockSettingsWebContentsSend).toHaveBeenCalledWith(CHANNELS.APP_UPDATE_OPERATION_CHANGED, {
+        phase: 'error',
+        currentVersion: '1.0.19',
+        latestVersion: null,
+        action: null,
+        error: 'Network error',
       });
     });
   });

@@ -6,6 +6,7 @@ import AppearanceSettings from './AppearanceSettings';
 import ThemesSettings from './ThemesSettings';
 import KeyboardSettings from './KeyboardSettings';
 import DistributionSettings from './DistributionSettings';
+import UpdateSettings from './UpdateSettings';
 import styles from './SettingsPanel.module.css';
 
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
@@ -24,6 +25,8 @@ function renderSettingsContent() {
       return <KeyboardSettings />;
     case 'distribution':
       return <DistributionSettings />;
+    case 'updates':
+      return <UpdateSettings />;
     case 'general':
     default:
       return <GeneralSettings />;

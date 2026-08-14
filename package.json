@@ -1,7 +1,7 @@
 {
   "name": "quakeshell",
   "productName": "quakeshell",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "Quake-style drop-down terminal for Windows, distributed as a global npm command.",
   "main": ".vite/build/index.js",
   "bin": {

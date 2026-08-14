@@ -10,6 +10,7 @@ import * as tabManager from './tab-manager';
 import { destroyTray } from './tray-manager';
 import { checkForUpdates } from './notification-manager';
 import { register as registerContextMenu, deregister as deregisterContextMenu } from './context-menu-installer';
+import { WINDOWS_APP_USER_MODEL_ID } from '../shared/constants';
 
 const logger = log.scope('app-lifecycle');
 
@@ -189,7 +190,7 @@ export function handleSquirrelLifecycle(argv: string[] = process.argv): boolean 
  *
  * @returns false if a second instance was detected and the app should quit
  */
-export function initAppLifecycle(): boolean {
+export function initAppLifecycle(platform = process.platform): boolean {
   const startTime = performance.now();
   logger.info('Initializing app lifecycle');
 
@@ -200,6 +201,10 @@ export function initAppLifecycle(): boolean {
     logger.info('Another instance is running — quitting');
     app.quit();
     return false;
+  }
+
+  if (platform === 'win32') {
+    app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
   }
 
   const lockTime = performance.now();
@@ -306,18 +311,21 @@ export function gracefulShutdown(): void {
   // 2. Set quitting flag so window close interceptor allows it
   windowManager.setQuitting(true);
 
-  // 3. Close the window
+  // 3. Tear down focus-fade work before native window teardown
+  windowManager.teardownFocusFade();
+
+  // 4. Close the window
   const win = windowManager.getWindow();
   if (win && !win.isDestroyed()) {
     win.close();
     logger.info('Window closed');
   }
 
-  // 4. Destroy tray icon
+  // 5. Destroy tray icon
   destroyTray();
   logger.info('Tray destroyed');
 
-  // 5. Quit the app (with force-quit timeout safeguard)
+  // 6. Quit the app (with force-quit timeout safeguard)
   const forceQuitTimer = setTimeout(() => {
     logger.warn('Force-quitting after timeout');
     app.exit(0);

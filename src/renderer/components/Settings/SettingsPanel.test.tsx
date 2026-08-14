@@ -12,6 +12,7 @@ vi.mock('./AppearanceSettings', () => ({ default: () => <div>Appearance content<
 vi.mock('./ThemesSettings', () => ({ default: () => <div>Themes content</div> }));
 vi.mock('./KeyboardSettings', () => ({ default: () => <div>Keyboard content</div> }));
 vi.mock('./DistributionSettings', () => ({ default: () => <div>Distribution content</div> }));
+vi.mock('./UpdateSettings', () => ({ default: () => <div>Updates content</div> }));
 
 Object.defineProperty(window, 'quakeshell', {
   value: {
@@ -109,6 +110,7 @@ describe('SettingsPanel', () => {
     expect(container.textContent).toContain('Themes');
     expect(container.textContent).toContain('Keyboard');
     expect(container.textContent).toContain('Distribution');
+    expect(container.textContent).toContain('Updates');
 
     const themesButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent === 'Themes',
@@ -119,6 +121,16 @@ describe('SettingsPanel', () => {
     });
 
     expect(container.textContent).toContain('Themes content');
+
+    const updatesButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Updates',
+    ) as HTMLButtonElement;
+
+    await act(async () => {
+      updatesButton.click();
+    });
+
+    expect(container.textContent).toContain('Updates content');
   });
 
   it('clicking the close button closes the overlay', async () => {

@@ -5,7 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import log from 'electron-log/main';
 import { APP_NAME } from '@shared/constants';
-import type { PendingUpdatePayload } from '@shared/ipc-types';
+import type {
+  PendingUpdatePayload,
+  UpdateOperationState,
+} from '@shared/ipc-types';
 import * as windowManager from './window-manager';
 
 const logger = log.scope('notification-manager');
@@ -22,8 +25,13 @@ const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-
 let pendingUpdateVersion: string | null = null;
 let installingUpdateVersion: string | null = null;
 let updateInstallPromise: Promise<void> | null = null;
+let manualUpdateInstallRequested = false;
+let updateCheckPromise: Promise<UpdateCheckResult> | null = null;
+let manualUpdateCheckRequested = false;
 let updateRestartHandler: (() => void) | null = null;
+let updateOperationState: UpdateOperationState | null = null;
 const pendingUpdateListeners = new Set<(payload: PendingUpdatePayload | null) => void>();
+const updateOperationListeners = new Set<(state: UpdateOperationState | null) => void>();
 
 export interface NotificationOptions {
   title: string;
@@ -41,6 +49,34 @@ export interface UpdateCheckResult {
 
 export function setUpdateRestartHandler(handler: (() => void) | null): void {
   updateRestartHandler = handler;
+}
+
+function emitUpdateOperationChanged(): void {
+  for (const listener of updateOperationListeners) {
+    try {
+      listener(updateOperationState);
+    } catch (error) {
+      updateLogger.warn(`Update operation listener failed: ${getErrorMessage(error)}`);
+    }
+  }
+}
+
+function setUpdateOperationState(state: UpdateOperationState | null): void {
+  updateOperationState = state;
+  emitUpdateOperationChanged();
+}
+
+export function getUpdateOperationState(): UpdateOperationState | null {
+  return updateOperationState;
+}
+
+export function onUpdateOperationChange(
+  listener: (state: UpdateOperationState | null) => void,
+): () => void {
+  updateOperationListeners.add(listener);
+  return () => {
+    updateOperationListeners.delete(listener);
+  };
 }
 
 function buildPendingUpdatePayload(version: string): PendingUpdatePayload {
@@ -234,17 +270,49 @@ function launchDetachedExecutable(executablePath: string): Promise<void> {
   });
 }
 
+async function openReleasePageFallback(
+  currentVersion: string,
+  version: string,
+  reason: string,
+): Promise<void> {
+  setPendingUpdateVersion(null);
+
+  try {
+    await shell.openExternal(getReleasePageUrl(version));
+    setUpdateOperationState({
+      phase: 'available',
+      currentVersion,
+      latestVersion: version,
+      action: 'download',
+    });
+  } catch (error) {
+    const message = getErrorMessage(error);
+    updateLogger.warn(`Failed to open fallback release page: ${message}`);
+    setUpdateOperationState({
+      phase: 'error',
+      currentVersion,
+      latestVersion: version,
+      action: 'download',
+      error: `${reason} Could not open the download page: ${message}`,
+    });
+  }
+}
+
 async function restartIntoInstalledVersion(version: string): Promise<boolean> {
   const executablePath = getInstalledExecutable(version);
+  const currentVersion = getUpdateOperationState()?.currentVersion ?? app.getVersion();
 
   if (!executablePath) {
-    void shell.openExternal(getReleasePageUrl(version));
+    const reason = `Installed executable for ${APP_NAME} v${version} was not found.`;
+    updateLogger.warn(reason);
+    await openReleasePageFallback(currentVersion, version, reason);
     return false;
   }
 
   try {
     await launchDetachedExecutable(executablePath);
     setPendingUpdateVersion(null);
+    setUpdateOperationState(null);
     if (updateRestartHandler) {
       updateRestartHandler();
     } else {
@@ -253,28 +321,41 @@ async function restartIntoInstalledVersion(version: string): Promise<boolean> {
     return true;
   } catch (error) {
     const message = getErrorMessage(error);
-    updateLogger.warn(`Failed to relaunch ${APP_NAME} ${version}: ${message}`);
-    void shell.openExternal(getReleasePageUrl(version));
+    const reason = `Failed to relaunch ${APP_NAME} v${version}: ${message}`;
+    updateLogger.warn(reason);
+    await openReleasePageFallback(currentVersion, version, reason);
     return false;
   }
 }
 
 export async function restartPendingUpdate(): Promise<boolean> {
-  if (!pendingUpdateVersion) {
+  const pendingUpdate = getPendingUpdate();
+  if (!pendingUpdate) {
     return false;
   }
 
-  return restartIntoInstalledVersion(pendingUpdateVersion);
+  return restartIntoInstalledVersion(pendingUpdate.version);
 }
 
-async function installAvailableUpdate(latestVersion: string): Promise<void> {
+async function installAvailableUpdate(
+  currentVersion: string,
+  latestVersion: string,
+  manual = false,
+): Promise<void> {
   const validatedVersion = validateRegistryVersion(latestVersion);
 
-  if (pendingUpdateVersion === validatedVersion) {
+  if (getPendingUpdate()?.version === validatedVersion) {
+    setUpdateOperationState({
+      phase: 'ready-to-restart',
+      currentVersion,
+      latestVersion: validatedVersion,
+      action: 'restart',
+    });
     return;
   }
 
   if (updateInstallPromise) {
+    manualUpdateInstallRequested ||= manual;
     if (installingUpdateVersion && installingUpdateVersion !== validatedVersion) {
       updateLogger.info(
         `Update install already running for ${installingUpdateVersion}; deferring ${validatedVersion}`,
@@ -285,8 +366,21 @@ async function installAvailableUpdate(latestVersion: string): Promise<void> {
   }
 
   installingUpdateVersion = validatedVersion;
+  manualUpdateInstallRequested = manual;
+  setUpdateOperationState({
+    phase: 'installing',
+    currentVersion,
+    latestVersion: validatedVersion,
+    action: null,
+  });
   updateInstallPromise = runNpmInstall(validatedVersion)
     .then(() => {
+      setUpdateOperationState({
+        phase: 'ready-to-restart',
+        currentVersion,
+        latestVersion: validatedVersion,
+        action: 'restart',
+      });
       setPendingUpdateVersion(validatedVersion);
       updateLogger.info(`Update installed: ${validatedVersion}`);
     })
@@ -295,22 +389,85 @@ async function installAvailableUpdate(latestVersion: string): Promise<void> {
         setPendingUpdateVersion(null);
       }
       const message = getErrorMessage(error);
-      updateLogger.warn(`Automatic update failed: ${message}`);
-      send({
-        title: APP_NAME,
-        body: `Automatic update failed. Click to open ${APP_NAME} v${validatedVersion}.`,
-        onClick: () => {
-          void shell.openExternal(getReleasePageUrl(validatedVersion));
-        },
-        bypassSuppression: true,
-      });
+      updateLogger.warn(`Update install failed: ${message}`);
+      if (manualUpdateInstallRequested) {
+        setUpdateOperationState({
+          phase: 'error',
+          currentVersion,
+          latestVersion: validatedVersion,
+          action: 'install',
+          error: message,
+        });
+        send({
+          title: APP_NAME,
+          body: `Update installation failed. Click to retry ${APP_NAME} v${validatedVersion}.`,
+          onClick: () => {
+            void windowManager.openSettingsWindow('updates').catch((openError) => {
+              updateLogger.warn(`Failed to open Updates settings: ${getErrorMessage(openError)}`);
+            });
+          },
+          bypassSuppression: true,
+        });
+      } else {
+        setUpdateOperationState(null);
+      }
     })
     .finally(() => {
       installingUpdateVersion = null;
       updateInstallPromise = null;
+      manualUpdateInstallRequested = false;
     });
 
   return updateInstallPromise;
+}
+
+export async function startAvailableUpdate(): Promise<UpdateOperationState | null> {
+  const state = getUpdateOperationState();
+  if (
+    (state?.phase !== 'available' && state?.phase !== 'error')
+    || state.action !== 'install'
+    || !state.latestVersion
+  ) {
+    return state;
+  }
+
+  await installAvailableUpdate(state.currentVersion, state.latestVersion, true);
+  return getUpdateOperationState();
+}
+
+export async function openAvailableUpdateDownload(): Promise<boolean> {
+  const state = getUpdateOperationState();
+  if (
+    (state?.phase !== 'available' && state?.phase !== 'error')
+    || state.action !== 'download'
+    || !state.latestVersion
+  ) {
+    return false;
+  }
+
+  try {
+    await shell.openExternal(getReleasePageUrl(state.latestVersion));
+    if (state.phase === 'error') {
+      setUpdateOperationState({
+        phase: 'available',
+        currentVersion: state.currentVersion,
+        latestVersion: state.latestVersion,
+        action: 'download',
+      });
+    }
+    return true;
+  } catch (error) {
+    const message = getErrorMessage(error);
+    updateLogger.warn(`Failed to open update download page: ${message}`);
+    setUpdateOperationState({
+      phase: 'error',
+      currentVersion: state.currentVersion,
+      latestVersion: state.latestVersion,
+      action: 'download',
+      error: message,
+    });
+    return false;
+  }
 }
 
 /**
@@ -375,66 +532,211 @@ function isNewerVersion(current: string, latest: string): boolean {
 
 /**
  * Check npm registry for a newer version of QuakeShell.
- * @param manual - true when triggered by user (shows "up to date" message); false for periodic check
+ * @param manual - true when triggered by user; false for periodic background checks
  */
-export async function checkForUpdates(manual = false): Promise<UpdateCheckResult> {
+export function checkForUpdates(manual = false): Promise<UpdateCheckResult> {
   const currentVersion = app.getVersion();
+  const pendingUpdate = getPendingUpdate();
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), UPDATE_FETCH_TIMEOUT);
+  if (pendingUpdate) {
+    setUpdateOperationState({
+      phase: 'ready-to-restart',
+      currentVersion,
+      latestVersion: pendingUpdate.version,
+      action: 'restart',
+    });
+    return Promise.resolve({
+      updateAvailable: true,
+      currentVersion,
+      latestVersion: pendingUpdate.version,
+    });
+  }
 
-    const response = await fetch(REGISTRY_URL, { signal: controller.signal });
-    clearTimeout(timeoutId);
+  if (updateInstallPromise && installingUpdateVersion) {
+    manualUpdateInstallRequested ||= manual;
+    return Promise.resolve({
+      updateAvailable: true,
+      currentVersion,
+      latestVersion: installingUpdateVersion,
+    });
+  }
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+  if (updateCheckPromise) {
+    if (manual && !manualUpdateCheckRequested) {
+      manualUpdateCheckRequested = true;
+      setUpdateOperationState({
+        phase: 'checking',
+        currentVersion: app.getVersion(),
+        latestVersion: null,
+        action: null,
+      });
     }
 
-    const data = await response.json() as { version?: string };
-    const latestVersion = validateRegistryVersion(data.version ?? null);
+    return updateCheckPromise;
+  }
 
-    const updateAvailable = isNewerVersion(currentVersion, latestVersion);
+  manualUpdateCheckRequested = manual;
 
-    if (updateAvailable) {
-      if (pendingUpdateVersion === latestVersion) {
-        updateLogger.info(`Update already installed and waiting for restart: ${latestVersion}`);
-      } else if (canAutoInstallUpdate()) {
-        void installAvailableUpdate(latestVersion);
+  if (manual) {
+    setUpdateOperationState({
+      phase: 'checking',
+      currentVersion,
+      latestVersion: null,
+      action: null,
+    });
+  }
+
+  updateCheckPromise = (async () => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), UPDATE_FETCH_TIMEOUT);
+      let response: Response;
+
+      try {
+        response = await fetch(REGISTRY_URL, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json() as { version?: string };
+      const latestVersion = validateRegistryVersion(data.version ?? null);
+
+      const completedPendingUpdate = getPendingUpdate();
+      if (completedPendingUpdate) {
+        setUpdateOperationState({
+          phase: 'ready-to-restart',
+          currentVersion,
+          latestVersion: completedPendingUpdate.version,
+          action: 'restart',
+        });
+        return {
+          updateAvailable: true,
+          currentVersion,
+          latestVersion: completedPendingUpdate.version,
+        };
+      }
+
+      const updateAvailable = isNewerVersion(currentVersion, latestVersion);
+      const shouldShowManualResult = manualUpdateCheckRequested;
+      const existingOperationState = getUpdateOperationState();
+      const hasManuallyDeferredInstall = existingOperationState?.phase === 'available'
+        && existingOperationState.action === 'install';
+
+      if (updateAvailable) {
+        if (getPendingUpdate()?.version === latestVersion) {
+          setUpdateOperationState({
+            phase: 'ready-to-restart',
+            currentVersion,
+            latestVersion,
+            action: 'restart',
+          });
+          updateLogger.info(`Update already installed and waiting for restart: ${latestVersion}`);
+        } else if (shouldShowManualResult || hasManuallyDeferredInstall) {
+          setUpdateOperationState({
+            phase: 'available',
+            currentVersion,
+            latestVersion,
+            action: canAutoInstallUpdate() ? 'install' : 'download',
+          });
+        } else if (canAutoInstallUpdate()) {
+          void installAvailableUpdate(currentVersion, latestVersion);
+        } else {
+          setUpdateOperationState({
+            phase: 'available',
+            currentVersion,
+            latestVersion,
+            action: 'download',
+          });
+          send({
+            title: APP_NAME,
+            body: `${APP_NAME} v${latestVersion} available. Click to download.`,
+            onClick: () => {
+              void shell.openExternal(getReleasePageUrl(latestVersion));
+            },
+            bypassSuppression: true,
+          });
+        }
+        updateLogger.info(`Update available: ${currentVersion} → ${latestVersion}`);
+      } else if (shouldShowManualResult || existingOperationState !== null) {
+        setUpdateOperationState({
+          phase: 'up-to-date',
+          currentVersion,
+          latestVersion,
+          action: null,
+        });
+        if (shouldShowManualResult) {
+          send({
+            title: APP_NAME,
+            body: `${APP_NAME} is up to date`,
+            bypassSuppression: true,
+          });
+        }
+        updateLogger.info(`Up to date: ${currentVersion}`);
       } else {
+        updateLogger.verbose(`No update: ${currentVersion} is current`);
+      }
+
+      return { updateAvailable, currentVersion, latestVersion };
+    } catch (error) {
+      const message = getErrorMessage(error);
+      updateLogger.verbose(`Update check failed: ${message}`);
+      const completedPendingUpdate = getPendingUpdate();
+      if (completedPendingUpdate) {
+        setUpdateOperationState({
+          phase: 'ready-to-restart',
+          currentVersion,
+          latestVersion: completedPendingUpdate.version,
+          action: 'restart',
+        });
+        return {
+          updateAvailable: true,
+          currentVersion,
+          latestVersion: completedPendingUpdate.version,
+        };
+      }
+
+      if (manualUpdateCheckRequested) {
+        setUpdateOperationState({
+          phase: 'error',
+          currentVersion,
+          latestVersion: null,
+          action: null,
+          error: message,
+        });
         send({
           title: APP_NAME,
-          body: `${APP_NAME} v${latestVersion} available. Click to download.`,
+          body: 'Update check failed. Click to try again.',
           onClick: () => {
-            void shell.openExternal(getReleasePageUrl(latestVersion));
+            void checkForUpdates(true);
           },
           bypassSuppression: true,
         });
       }
-      updateLogger.info(`Update available: ${currentVersion} → ${latestVersion}`);
-    } else if (manual) {
-      send({
-        title: APP_NAME,
-        body: `${APP_NAME} is up to date`,
-        bypassSuppression: true,
-      });
-      updateLogger.info(`Up to date: ${currentVersion}`);
-    } else {
-      updateLogger.verbose(`No update: ${currentVersion} is current`);
+      return { updateAvailable: false, currentVersion, latestVersion: null, error: message };
     }
+  })();
 
-    return { updateAvailable, currentVersion, latestVersion };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    updateLogger.verbose(`Update check failed: ${message}`);
-    return { updateAvailable: false, currentVersion, latestVersion: null, error: message };
-  }
+  void updateCheckPromise.finally(() => {
+    updateCheckPromise = null;
+    manualUpdateCheckRequested = false;
+  });
+
+  return updateCheckPromise;
 }
 
 export function _reset(): void {
   pendingUpdateVersion = null;
   installingUpdateVersion = null;
   updateInstallPromise = null;
+  manualUpdateInstallRequested = false;
+  updateCheckPromise = null;
+  manualUpdateCheckRequested = false;
   updateRestartHandler = null;
+  updateOperationState = null;
   pendingUpdateListeners.clear();
+  updateOperationListeners.clear();
 }

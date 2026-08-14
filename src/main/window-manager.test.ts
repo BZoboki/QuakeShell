@@ -25,6 +25,8 @@ const mockOn = vi.fn();
 const mockRemoveListener = vi.fn();
 const mockSetOpacity = vi.fn();
 const mockIsFocused = vi.fn(() => mockWindowFocused);
+let mockWindowDestroyed = false;
+const mockIsDestroyed = vi.fn(() => mockWindowDestroyed);
 const mockWebContents = { send: vi.fn(), openDevTools: vi.fn() };
 let lastBrowserWindowArgs: unknown = null;
 const createdBrowserWindowArgs: unknown[] = [];
@@ -67,7 +69,7 @@ vi.mock('electron', () => {
       },
       setOpacity: mockSetOpacity,
       isFocused: mockIsFocused,
-      isDestroyed: vi.fn(() => false),
+      isDestroyed: mockIsDestroyed,
       webContents: mockWebContents,
     };
   }
@@ -202,6 +204,7 @@ describe('main/window-manager', () => {
     lastBrowserWindowArgs = null;
     createdBrowserWindowArgs.length = 0;
     mockWindowFocused = false;
+    mockWindowDestroyed = false;
     mockBounds.x = 0;
     mockBounds.y = -312;
     mockBounds.width = 1920;
@@ -719,6 +722,66 @@ describe('main/window-manager', () => {
       await vi.runAllTimersAsync();
 
       expect(isVisible()).toBe(false);
+    });
+
+    it('does not call native window methods when a pending focus-fade callback runs after destruction', async () => {
+      const configStore = createMockConfigStore();
+      configStore.get.mockImplementation((key: string) => {
+        if (key === 'focusFade') return true;
+        if (key === 'opacity') return 0.85;
+        if (key === 'dropHeight') return 30;
+        if (key === 'animationSpeed') return 200;
+        return undefined;
+      });
+      await showWindow(configStore);
+      setupFocusFade();
+
+      simulateEvent('blur');
+      mockGetBounds.mockClear();
+      mockSetBounds.mockClear();
+      mockBlur.mockClear();
+      mockHide.mockClear();
+      mockWindowDestroyed = true;
+
+      vi.advanceTimersByTime(300);
+      await vi.runAllTimersAsync();
+
+      expect(mockGetBounds).not.toHaveBeenCalled();
+      expect(mockSetBounds).not.toHaveBeenCalled();
+      expect(mockBlur).not.toHaveBeenCalled();
+      expect(mockHide).not.toHaveBeenCalled();
+    });
+
+    it('stops an in-flight focus-fade hide when the window is destroyed', async () => {
+      const configStore = createMockConfigStore();
+      configStore.get.mockImplementation((key: string) => {
+        if (key === 'focusFade') return true;
+        if (key === 'opacity') return 0.85;
+        if (key === 'dropHeight') return 30;
+        if (key === 'animationSpeed') return 200;
+        return undefined;
+      });
+      await showWindow(configStore);
+      setupFocusFade();
+
+      simulateEvent('blur');
+      vi.advanceTimersByTime(300);
+      expect(isAnimating()).toBe(true);
+
+      mockGetBounds.mockClear();
+      mockSetBounds.mockClear();
+      mockBlur.mockClear();
+      mockHide.mockClear();
+      mockWindowDestroyed = true;
+
+      vi.advanceTimersByTime(16);
+      await vi.runAllTimersAsync();
+
+      expect(isAnimating()).toBe(false);
+      expect(mockGetBounds).not.toHaveBeenCalled();
+      expect(mockSetBounds).not.toHaveBeenCalled();
+      expect(mockBlur).not.toHaveBeenCalled();
+      expect(mockHide).not.toHaveBeenCalled();
     });
 
     it('cancels hide when focus returns within 300ms grace period', async () => {

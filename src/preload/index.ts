@@ -4,6 +4,7 @@ import type {
   PendingUpdatePayload,
   TabDataPayload,
   TabExitedPayload,
+  UpdateOperationState,
 } from '@shared/ipc-types';
 
 type IpcSubscriber<TArgs extends unknown[]> = (...args: TArgs) => void;
@@ -45,6 +46,9 @@ function createIpcSubscriber<TArgs extends unknown[]>(channel: string) {
 const subscribeToTerminalFocus = createIpcSubscriber<[]>(CHANNELS.TERMINAL_FOCUS);
 const subscribeToTabData = createIpcSubscriber<[TabDataPayload]>(CHANNELS.TAB_DATA);
 const subscribeToTabExited = createIpcSubscriber<[TabExitedPayload]>(CHANNELS.TAB_EXITED);
+const subscribeToUpdateOperation = createIpcSubscriber<[UpdateOperationState | null]>(
+  CHANNELS.APP_UPDATE_OPERATION_CHANGED,
+);
 
 contextBridge.exposeInMainWorld('quakeshell', {
   config: {
@@ -188,6 +192,13 @@ contextBridge.exposeInMainWorld('quakeshell', {
   },
   app: {
     checkWSL: () => ipcRenderer.invoke(CHANNELS.APP_CHECK_WSL),
+    getVersion: () => ipcRenderer.invoke(CHANNELS.APP_GET_VERSION),
+    getUpdateOperation: () => ipcRenderer.invoke(CHANNELS.APP_GET_UPDATE_OPERATION),
+    checkForUpdates: () => ipcRenderer.invoke(CHANNELS.APP_CHECK_FOR_UPDATES),
+    startAvailableUpdate: () => ipcRenderer.invoke(CHANNELS.APP_START_AVAILABLE_UPDATE),
+    openAvailableUpdateDownload: () => ipcRenderer.invoke(CHANNELS.APP_OPEN_AVAILABLE_UPDATE_DOWNLOAD),
+    onUpdateOperationChanged: (callback: (state: UpdateOperationState | null) => void) =>
+      subscribeToUpdateOperation(callback),
     getPendingUpdate: () => ipcRenderer.invoke(CHANNELS.APP_GET_PENDING_UPDATE),
     restartPendingUpdate: () => ipcRenderer.invoke(CHANNELS.APP_RESTART_PENDING_UPDATE),
     delayPendingUpdate: () => ipcRenderer.invoke(CHANNELS.APP_DELAY_PENDING_UPDATE),

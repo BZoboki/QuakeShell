@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { APP_NAME, APP_ID } from './constants';
+import { APP_NAME, APP_ID, WINDOWS_APP_USER_MODEL_ID } from './constants';
 import { CHANNELS } from './channels';
 
 describe('shared/constants', () => {
@@ -9,6 +9,10 @@ describe('shared/constants', () => {
 
   it('exports APP_ID', () => {
     expect(APP_ID).toBe('com.quakeshell.app');
+  });
+
+  it('exports the Windows AppUserModelID matching the packaged shortcut', () => {
+    expect(WINDOWS_APP_USER_MODEL_ID).toBe('electron.app.quakeshell');
   });
 });
 
@@ -52,6 +56,11 @@ describe('shared/channels', () => {
   it('contains placeholder app channels', () => {
     expect(CHANNELS.APP_QUIT).toBe('app:quit');
     expect(CHANNELS.APP_GET_VERSION).toBe('app:get-version');
+    expect(CHANNELS.APP_GET_UPDATE_OPERATION).toBe('app:get-update-operation');
+    expect(CHANNELS.APP_UPDATE_OPERATION_CHANGED).toBe('app:update-operation-changed');
+    expect(CHANNELS.APP_CHECK_FOR_UPDATES).toBe('app:check-for-updates');
+    expect(CHANNELS.APP_START_AVAILABLE_UPDATE).toBe('app:start-available-update');
+    expect(CHANNELS.APP_OPEN_AVAILABLE_UPDATE_DOWNLOAD).toBe('app:open-available-update-download');
     expect(CHANNELS.APP_GET_PENDING_UPDATE).toBe('app:get-pending-update');
     expect(CHANNELS.APP_UPDATE_READY).toBe('app:update-ready');
     expect(CHANNELS.APP_RESTART_PENDING_UPDATE).toBe('app:restart-pending-update');
