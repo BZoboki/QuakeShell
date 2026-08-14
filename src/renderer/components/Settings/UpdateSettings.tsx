@@ -70,7 +70,7 @@ export default function UpdateSettings() {
     try {
       await initUpdateOperationStore();
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Update action failed');
+      setLoadError(error instanceof Error ? error.message : 'Failed to load update status');
     } finally {
       setIsActing(false);
     }
