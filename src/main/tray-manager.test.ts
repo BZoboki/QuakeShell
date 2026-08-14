@@ -14,8 +14,6 @@ const {
   mockAppGetVersion,
   mockDialogShowMessageBox,
   mockShellOpenPath,
-  nativeThemeState,
-  nativeThemeListeners,
 } = vi.hoisted(() => ({
   mockTrayDestroy: vi.fn(),
   mockTraySetToolTip: vi.fn(),
@@ -26,8 +24,6 @@ const {
   mockAppGetVersion: vi.fn(() => '1.2.3'),
   mockDialogShowMessageBox: vi.fn(() => Promise.resolve({ response: 0 })),
   mockShellOpenPath: vi.fn(),
-  nativeThemeState: { dark: true },
-  nativeThemeListeners: {} as Record<string, (() => void)[]>,
 }));
 
 vi.mock('electron', () => {
@@ -54,13 +50,6 @@ vi.mock('electron', () => {
     },
     dialog: {
       showMessageBox: mockDialogShowMessageBox,
-    },
-    nativeTheme: {
-      get shouldUseDarkColors() { return nativeThemeState.dark; },
-      on: vi.fn((event: string, cb: () => void) => {
-        if (!nativeThemeListeners[event]) nativeThemeListeners[event] = [];
-        nativeThemeListeners[event].push(cb);
-      }),
     },
     nativeImage: {
       createFromPath: vi.fn((p: string) => p),
@@ -102,10 +91,6 @@ function findMenuItem(label: string) {
 describe('main/tray-manager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    nativeThemeState.dark = true;
-    for (const key of Object.keys(nativeThemeListeners)) {
-      delete nativeThemeListeners[key];
-    }
   });
 
   describe('createTray() — legacy overload', () => {
@@ -224,40 +209,13 @@ describe('main/tray-manager', () => {
     });
   });
 
-  describe('theme-aware icons', () => {
-    it('uses dark icon when system is in dark mode', () => {
-      nativeThemeState.dark = true;
-      createTray(vi.fn());
-
-      // The icon path should contain 'icon-dark.ico' (taskbar is dark → use dark icon contrast)
-      // Actually: shouldUseDarkColors=true means dark theme → getIconPath returns 'icon-dark.ico'
-      const mockCreateFromPath = nativeImage.createFromPath as ReturnType<typeof vi.fn>;
-      const lastCall = mockCreateFromPath.mock.calls[0][0];
-      expect(lastCall).toContain('icon-dark.ico');
-    });
-
-    it('uses light icon when system is in light mode', () => {
-      nativeThemeState.dark = false;
+  describe('tray icon', () => {
+    it('uses the root application icon', () => {
       createTray(vi.fn());
 
       const mockCreateFromPath = nativeImage.createFromPath as ReturnType<typeof vi.fn>;
-      const lastCall = mockCreateFromPath.mock.calls[0][0];
-      expect(lastCall).toContain('icon-light.ico');
-    });
-
-    it('switches icon when theme changes', () => {
-      nativeThemeState.dark = true;
-      createTray(vi.fn());
-
-      // Simulate theme change
-      nativeThemeState.dark = false;
-      const updatedListeners = nativeThemeListeners['updated'] ?? [];
-      for (const cb of updatedListeners) cb();
-
-      expect(mockTraySetImage).toHaveBeenCalled();
-      const mockCreateFromPath = nativeImage.createFromPath as ReturnType<typeof vi.fn>;
-      const lastCall = mockCreateFromPath.mock.calls[mockCreateFromPath.mock.calls.length - 1][0];
-      expect(lastCall).toContain('icon-light.ico');
+      const iconPath = mockCreateFromPath.mock.calls[0][0];
+      expect(iconPath).toMatch(/[\\/]assets[\\/]icon\.ico$/);
     });
   });
 

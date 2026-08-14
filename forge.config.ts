@@ -12,12 +12,14 @@ const PACKAGED_BUILD_ROOT = '/.vite';
 const PACKAGED_SOURCE_RENDERER_ROOT = '/src/renderer/.vite';
 const PACKAGED_NODE_MODULES_ROOT = '/node_modules';
 const PACKAGED_NODE_PTY_ROOT = '/node_modules/node-pty';
+const PACKAGED_ICON_PATH = '/assets/icon.ico';
 
 const PACKAGED_RUNTIME_ROOTS = [
   PACKAGED_BUILD_ROOT,
   PACKAGED_SOURCE_RENDERER_ROOT,
   PACKAGED_NODE_MODULES_ROOT,
   PACKAGED_NODE_PTY_ROOT,
+  PACKAGED_ICON_PATH,
 ];
 
 function normalizePackagerPath(file: unknown): string {
@@ -58,6 +60,7 @@ function ignoreNonPackagedRuntimeFiles(file: unknown): boolean {
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    icon: './assets/icon.ico',
     extraResource: ['./themes'],
     ignore: ignoreNonPackagedRuntimeFiles,
   },

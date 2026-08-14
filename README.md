@@ -1,5 +1,7 @@
 <div align="center">
-    
+
+<img src="assets/icon.png" alt="QuakeShell application icon" width="160">
+
 # QuakeShell
 
 **Quake-style drop-down terminal for Windows — instant shell access, always one keystroke away.**

@@ -228,6 +228,12 @@ export function initAppLifecycle(): boolean {
  * Call after config store is available.
  */
 export function applyAutostart(enabled: boolean): void {
+  if (!app.isPackaged) {
+    app.setLoginItemSettings({ openAtLogin: false, args: [] });
+    logger.info('Autostart is disabled for the unpackaged Electron runtime');
+    return;
+  }
+
   app.setLoginItemSettings({ openAtLogin: enabled, args: [] });
   logger.info(`Autostart ${enabled ? 'enabled' : 'disabled'}`);
 }
